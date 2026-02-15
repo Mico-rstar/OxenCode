@@ -2,102 +2,84 @@ package ui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/yourname/oxencode/internal/message"
-	"github.com/yourname/oxencode/internal/ui/components"
 )
 
-// Model 主模型
+// Model TUI 主模型
 type Model struct {
-	input       components.Input
-	messages    components.Messages
-	width       int
-	height      int
-	quitting    bool
-	showWelcome bool
+	messages  []string          // 消息历史
+	input     string            // 用户输入
+	quitting  bool              // 是否正在退出
+	err       error             // 错误状态
 }
 
 // InitialModel 创建初始模型
 func InitialModel() Model {
 	return Model{
-		input: components.Input{
-			Prompt: "> ",
-			Focus:  true,
-			Style:  InputInnerStyle,
-		},
-		messages:    components.NewMessages(),
-		showWelcome: true,
+		messages: []string{"Welcome to OxenCode! Type your message and press Enter."},
+		input:    "",
+		quitting: false,
+		err:      nil,
 	}
 }
 
-// Init 初始化
+// Init 初始化模型
 func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-// Update 更新状态
+// Update 更新模型状态
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
 			m.quitting = true
 			return m, tea.Quit
-		}
 
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		case tea.KeyEnter:
+			if m.input != "" {
+				// 将用户消息添加到历史
+				m.messages = append(m.messages, "You: "+m.input)
+				m.input = ""
+			}
+			return m, nil
 
-	case components.UserSubmitMsg:
-		if msg.Content == "" {
+		case tea.KeyBackspace:
+			if len(m.input) > 0 {
+				m.input = m.input[:len(m.input)-1]
+			}
+			return m, nil
+
+		default:
+			// 添加字符到输入
+			if msg.Type == tea.KeyRunes {
+				m.input += string(msg.Runes)
+			}
 			return m, nil
 		}
-		m.showWelcome = false
-		m.messages.Update(message.UserMsg{Content: msg.Content})
-		m.input.Value = ""
-		m.input.Cursor = 0
 	}
 
-	var cmd tea.Cmd
-	model, cmd := m.input.Update(msg)
-	m.input = model.(components.Input)
-	return m, cmd
+	return m, nil
 }
 
 // View 渲染视图
 func (m Model) View() string {
+	// 简单的视图实现
+	s := "OxenCode - AI Programming Assistant\n\n"
+
+	// 显示消息历史
+	for _, msg := range m.messages {
+		s += msg + "\n"
+	}
+
+	s += "\n"
+
+	// 显示输入框
+	s += "> " + m.input
+
 	if m.quitting {
-		return "Bye!\n"
+		s += "\nGoodbye!"
 	}
 
-	if m.width == 0 {
-		return "Loading..."
-	}
-
-	// 构建视图
-	var sections []string
-
-	// 1. 欢迎信息或消息历史
-	if m.showWelcome && len(m.messages.Items) == 0 {
-		sections = append(sections, GetWelcomeStyle())
-	} else {
-		sections = append(sections, m.messages.View())
-	}
-
-	// 2. 输入框
-	sections = append(sections, m.renderInput())
-
-	// 3. 状态栏
-	sections = append(sections, StatusStyle.Width(m.width).Render("Press Ctrl+C or q to quit"))
-
-	// 垂直排列所有部分
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
-}
-
-// renderInput 渲染输入框
-func (m Model) renderInput() string {
-	// 直接渲染输入框，不添加光标符号
-	inputLine := m.input.Prompt + m.input.Value
-	return InputContainerStyle.Width(m.width).Render(inputLine)
+	return s
 }
