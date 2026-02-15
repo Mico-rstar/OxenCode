@@ -11,8 +11,9 @@ import (
 func main() {
 	// 创建 Bubble Tea 程序
 	p := tea.NewProgram(
-		ui.InitialModel(),
-		tea.WithAltScreen(), // 使用备用屏幕（全屏模式）
+		ui.NewModel(),
+		tea.WithAltScreen(),       // 使用备用屏幕（全屏模式）
+		tea.WithMouseCellMotion(), // 启用鼠标支持
 	)
 
 	// 运行程序
