@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/viper"
+	"github.com/yourname/oxencode/pkg/logger"
 )
 
 // ProviderType AI 服务提供商类型
@@ -52,16 +53,22 @@ var cfg *Config
 
 // Load 加载配置
 func Load() (*Config, error) {
+	log := logger.New("config")
+	log.Info("Loading configuration")
+
 	v := viper.New()
 
 	// 设置配置文件路径
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		log.Error("Failed to get home directory", "error", err)
 		return nil, err
 	}
 
 	configDir := filepath.Join(homeDir, ".config", "oxencode")
 	configPath := filepath.Join(configDir, "config.toml")
+
+	log.Debug("Config path", "path", configPath)
 
 	// 设置配置文件选项
 	v.SetConfigFile(configPath)
@@ -87,10 +94,13 @@ func Load() (*Config, error) {
 	configExists := true
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		configExists = false
+		log.Debug("User config not found", "path", configPath)
 	}
 
 	if configExists {
+		log.Info("Loading user config", "path", configPath)
 		if err := v.ReadInConfig(); err != nil {
+			log.Error("Failed to read config", "error", err)
 			return nil, err
 		}
 	} else {
@@ -99,8 +109,10 @@ func Load() (*Config, error) {
 		if err == nil {
 			exampleConfigPath := filepath.Join(workDir, "config.example.toml")
 			if _, err := os.Stat(exampleConfigPath); err == nil {
+				log.Info("Loading example config (development mode)", "path", exampleConfigPath)
 				v.SetConfigFile(exampleConfigPath)
 				if err := v.ReadInConfig(); err != nil {
+					log.Error("Failed to read example config", "error", err)
 					return nil, err
 				}
 			}
@@ -110,11 +122,20 @@ func Load() (*Config, error) {
 	// 解析配置
 	cfg = &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
+		log.Error("Failed to unmarshal config", "error", err)
 		return nil, err
 	}
 
+	log.Info("Configuration loaded",
+		"provider", cfg.Provider,
+		"model", cfg.Model,
+		"max_tokens", cfg.MaxTokens,
+		"temperature", cfg.Temperature,
+	)
+
 	// 验证配置
 	if err := validateConfig(cfg); err != nil {
+		log.Error("Config validation failed", "error", err)
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
@@ -150,42 +171,55 @@ func validateConfig(c *Config) error {
 
 // GetAPIKeyFromEnv 从环境变量获取 API Key
 func (c *Config) GetAPIKeyFromEnv() string {
+	log := logger.New("config")
+
 	if c.APIKey != "" {
+		log.Debug("Using API key from config")
 		return c.APIKey
 	}
 
 	// 根据 provider 尝试不同的环境变量
+	log.Debug("Trying to get API key from environment", "provider", c.Provider)
+
 	switch c.Provider {
 	case ProviderAnthropic:
 		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+			log.Debug("Found ANTHROPIC_API_KEY")
 			return key
 		}
 	case ProviderOpenAI, ProviderOpenAICompat, ProviderOpenRouter, ProviderVercel:
 		if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+			log.Debug("Found OPENAI_API_KEY")
 			return key
 		}
 	case ProviderAzure:
 		if key := os.Getenv("AZURE_OPENAI_API_KEY"); key != "" {
+			log.Debug("Found AZURE_OPENAI_API_KEY")
 			return key
 		}
 	case ProviderGoogle:
 		if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
+			log.Debug("Found GOOGLE_API_KEY")
 			return key
 		}
 	case ProviderQwen:
 		if key := os.Getenv("DASHSCOPE_API_KEY"); key != "" {
+			log.Debug("Found DASHSCOPE_API_KEY")
 			return key
 		}
 	case ProviderDeepSeek:
 		if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
+			log.Debug("Found DEEPSEEK_API_KEY")
 			return key
 		}
 	case ProviderGLM:
 		if key := os.Getenv("ZHIPU_API_KEY"); key != "" {
+			log.Debug("Found ZHIPU_API_KEY")
 			return key
 		}
 	}
 
+	log.Warn("No API key found in environment")
 	return ""
 }
 

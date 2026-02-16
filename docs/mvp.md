@@ -54,13 +54,13 @@
 - [x] 环境变量支持 (ANTHROPIC_API_KEY, OPENAI_API_KEY, DASHSCOPE_API_KEY, DEEPSEEK_API_KEY, ZHIPU_API_KEY, etc.)
 
 #### 2.2 流式输出
-- [ ] SSE流式响应处理
-- [ ] 打字机效果实现
-- [ ] 实时UI更新
-- [ ] 流式数据缓冲与渲染
+- [x] SSE流式响应处理
+- [x] 打字机效果实现
+- [x] 实时UI更新
+- [x] 流式数据缓冲与渲染
 
 #### 2.3 多轮对话
-- [ ] 对话历史存储
+- [x] 对话历史存储
 - [ ] Context管理
 - [ ] 消息序列化 (保存/加载)
 
