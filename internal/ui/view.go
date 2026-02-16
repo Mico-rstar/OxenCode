@@ -21,24 +21,41 @@ func (m Model) renderHeader() string {
 func (m Model) renderMessages() string {
 	var b strings.Builder
 
-	// 计算可用高度
-	headerHeight := 1
-	footerHeight := 3
-	availableHeight := m.height - headerHeight - footerHeight - 2
-
 	for _, msg := range m.messages {
 		b.WriteString(m.renderMessage(msg))
 		b.WriteString("\n\n")
 	}
 
-	// 截断以适应窗口
-	msgContent := b.String()
-	lines := strings.Split(msgContent, "\n")
-	if len(lines) > availableHeight {
-		lines = lines[len(lines)-availableHeight:]
+	content := b.String()
+
+	// 如果没有内容，显示提示
+	if content == "" {
+		return m.styles.MessageArea.Render("No messages yet. Start by typing a message!")
 	}
 
-	return m.styles.MessageArea.Render(strings.Join(lines, "\n"))
+	// 如果 viewport 高度为 0（初始化阶段），直接返回内容
+	if m.viewport.Height == 0 {
+		return m.styles.MessageArea.Render(content)
+	}
+
+	// 更新 viewport 内容
+	if content != m.cachedContent {
+		m.viewport.SetContent(content)
+		m.cachedContent = content
+
+		// 只在用户在底部或没有手动滚动时自动滚动
+		if m.atBottom || !m.userScrolled {
+			m.viewport.GotoBottom()
+			m.atBottom = true
+		}
+	}
+
+	// 返回 viewport 视图，并应用高度限制以防止溢出到 header/footer
+	viewportContent := m.viewport.View()
+
+	// 应用高度限制，确保 viewport 不会覆盖 header 和 footer
+	messageAreaStyle := m.styles.MessageArea.Height(m.viewport.Height)
+	return messageAreaStyle.Render(viewportContent)
 }
 
 // renderMessage 渲染单条消息
@@ -134,17 +151,22 @@ func (m Model) renderReActStep(step message.ReActStep, isLast bool) string {
 func (m Model) renderFooter() string {
 	// 输入框
 	prompt := m.styles.InputPrompt.Render("> ")
+
+	// 直接使用输入内容，空格正常显示
 	input := m.input
+	displayInput := input
+
+	// 添加光标
 	if m.cursor < len(input) {
-		input = input[:m.cursor] + "│" + input[m.cursor:]
+		displayInput = displayInput[:m.cursor] + "│" + displayInput[m.cursor:]
 	} else {
-		input = input + "│"
+		displayInput = displayInput + "│"
 	}
 
-	inputLine := lipgloss.JoinHorizontal(lipgloss.Top, prompt, input)
+	inputLine := lipgloss.JoinHorizontal(lipgloss.Top, prompt, displayInput)
 
 	// 帮助文本
-	help := m.styles.InputHelp.Render("[Enter: Send]  [Esc: Cancel]  [Ctrl+C: Quit]")
+	help := m.styles.InputHelp.Render("[Enter: Send]  [Alt+↑↓: Scroll]  [Alt+PgUp/Dn: Page]  [Ctrl+C: Quit]")
 
 	return lipgloss.JoinVertical(lipgloss.Left, inputLine, help)
 }

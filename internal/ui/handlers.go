@@ -2,13 +2,24 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/yourname/oxencode/internal/message"
 )
 
+// buildContent 构建消息内容字符串
+func (m *Model) buildContent() string {
+	var b strings.Builder
+	for _, msg := range m.messages {
+		b.WriteString(m.renderMessage(msg))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
 // handleKeyMsg 处理键盘消息
-func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// 如果权限弹窗激活，特殊处理
 	if m.permission.Active {
 		return m.handlePermissionKeyMsg(msg)
@@ -56,8 +67,80 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = len(m.input)
 		return m, nil
 
+	case tea.KeyUp:
+		// 如果输入框为空或按住 Alt，则向上滚动消息
+		if m.input == "" || msg.Alt {
+			if m.viewport.Height == 0 {
+				return m, nil
+			}
+
+			// 设置最新内容
+			content := m.buildContent()
+			if content == "" {
+				return m, nil
+			}
+
+			m.viewport.SetContent(content)
+
+			if m.viewport.TotalLineCount() == 0 {
+				return m, nil
+			}
+
+			m.viewport.ScrollUp(1)
+			m.userScrolled = true
+			m.atBottom = m.viewport.AtBottom()
+			return m, nil
+		}
+		return m, nil
+
+	case tea.KeyDown:
+		// 如果输入框为空或按住 Alt，则向下滚动消息
+		if m.input == "" || msg.Alt {
+			// 设置最新内容
+			content := m.buildContent()
+			if content == "" {
+				return m, nil
+			}
+
+			m.viewport.SetContent(content)
+			m.viewport.ScrollDown(1)
+			m.userScrolled = true
+			m.atBottom = m.viewport.AtBottom()
+			return m, nil
+		}
+		return m, nil
+
+	case tea.KeyPgUp:
+		// 如果输入框为空，则向上滚动半页
+		if m.input == "" {
+			content := m.buildContent()
+			if content != "" {
+				m.viewport.SetContent(content)
+				m.viewport.HalfPageUp()
+				m.userScrolled = true
+				m.atBottom = m.viewport.AtBottom()
+			}
+			return m, nil
+		}
+		return m, nil
+
+	case tea.KeyPgDown:
+		// 如果输入框为空，则向下滚动半页
+		if m.input == "" {
+			content := m.buildContent()
+			if content != "" {
+				m.viewport.SetContent(content)
+				m.viewport.HalfPageDown()
+				m.userScrolled = true
+				m.atBottom = m.viewport.AtBottom()
+			}
+			return m, nil
+		}
+		return m, nil
+
 	default:
-		if msg.Type == tea.KeyRunes {
+		// 处理字符输入（包括空格）
+		if len(msg.Runes) > 0 {
 			runes := string(msg.Runes)
 			m.input = m.input[:m.cursor] + runes + m.input[m.cursor:]
 			m.cursor += len(runes)
@@ -94,9 +177,14 @@ func (m Model) handlePermissionKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleSendMessage 处理发送消息
 func (m Model) handleSendMessage(msg SendMessage) (tea.Model, tea.Cmd) {
+
 	// 创建并添加用户消息
 	userMsg := message.NewMessage(message.RoleUser, msg.Content)
 	m.messages = append(m.messages, userMsg)
+
+	// 新消息到来，重置滚动状态，准备自动滚动
+	m.userScrolled = false
+	m.atBottom = true
 
 	// 清空输入框
 	m.input = ""

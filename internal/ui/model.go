@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/yourname/oxencode/internal/agent"
 	"github.com/yourname/oxencode/internal/config"
 	"github.com/yourname/oxencode/internal/message"
@@ -63,6 +64,13 @@ type Model struct {
 	// 流式响应 channels
 	streamCh     <-chan string
 	errCh        <-chan error
+
+	// 滚动视口
+	viewport         viewport.Model
+	scrollOffset     int  // 消息滚动偏移量
+	cachedContent    string // 缓存的消息内容
+	userScrolled     bool // 用户是否手动滚动过
+	atBottom         bool // 是否在底部
 
 	// 状态栏
 	statusTime  string
@@ -133,12 +141,14 @@ func NewModel() Model {
 			Active:  false,
 			Choices: []string{"Allow once", "Allow always", "Deny"},
 		},
-		agent:       ag,
-		ctx:         ctx,
-		cancelFunc:  cancel,
-		statusTime:  time.Now().Format("15:04:05"),
-		statusConn:  StatusOnline,
-		statusModel: cfg.Model,
+		agent:         ag,
+		ctx:           ctx,
+		cancelFunc:    cancel,
+		statusTime:    time.Now().Format("15:04:05"),
+		statusConn:    StatusOnline,
+		statusModel:   cfg.Model,
+		viewport:      viewport.New(0, 0),
+		atBottom:      true, // 初始时在底部
 	}
 }
 
@@ -159,6 +169,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// viewport.Update 不处理 WindowSizeMsg，需要手动设置大小
+		// 计算可用高度：总高度 - header(1行) - footer(2行)
+		messageAreaHeight := m.height - 1 - 2  // header + inputLine + help
+
+		if messageAreaHeight > 0 {
+			m.viewport.Width = m.width
+			m.viewport.Height = messageAreaHeight
+		}
+
+		// 滚动到底部
+		m.viewport.GotoBottom()
+
 		return m, nil
 
 	case StatusTickMsg:
