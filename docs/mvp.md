@@ -25,17 +25,17 @@
   │   └── api/            # API客户端
   └── docs/
   ```
-- [ ] 依赖集成
+- [x] 依赖集成
   - Bubble Tea (TUI框架)
   - fantasy (AI SDK)
   - lipgloss (样式)
   - Viper (配置管理)
 
 #### 1.2 基础TUI框架
-- [ ] Bubble Tea 基础模型 (Model)
-- [ ] 输入框组件 (用户输入)
-- [ ] 消息显示区域
-- [ ] 基础事件处理 (键盘输入)
+- [x] Bubble Tea 基础模型 (Model)
+- [x] 输入框组件 (用户输入)
+- [x] 消息显示区域
+- [x] 基础事件处理 (键盘输入)
 
 **🎯 里程碑 M1.1 - 基础界面**
 - 可编译运行的TUI应用
@@ -47,8 +47,11 @@
 ### Phase 2: AI对话核心 (Week 2)
 
 #### 2.1 LLM集成
-- [ ] fantasy SDK集成
-- [ ] 基础对话功能 (单轮)
+- [x] fantasy SDK集成
+- [x] 多 Provider 支持 (Anthropic, OpenAI, Azure, Bedrock, Google, OpenRouter, Vercel, OpenAICompat, Qwen, DeepSeek, GLM)
+- [x] 基础对话功能 (单轮)
+- [x] 配置文件支持 (config.example.toml)
+- [x] 环境变量支持 (ANTHROPIC_API_KEY, OPENAI_API_KEY, DASHSCOPE_API_KEY, DEEPSEEK_API_KEY, ZHIPU_API_KEY, etc.)
 
 #### 2.2 流式输出
 - [ ] SSE流式响应处理

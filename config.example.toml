@@ -1,0 +1,79 @@
+# OxenCode 配置示例
+# 复制此文件到 ~/.config/oxencode/config.toml
+
+# ====== Provider 配置 ======
+# 可选值: anthropic, openai, azure, bedrock, google, openrouter, vercel, openaicompat
+#          qwen, deepseek, glm
+provider = "qwen"
+
+# ====== API Key ======
+# 大多数情况下可以通过环境变量设置，这里留空即可
+# Anthropic: ANTHROPIC_API_KEY
+# OpenAI: OPENAI_API_KEY
+# Azure: AZURE_OPENAI_API_KEY
+# Google: GOOGLE_API_KEY
+# Qwen: DASHSCOPE_API_KEY
+# DeepSeek: DEEPSEEK_API_KEY
+# GLM: ZHIPU_API_KEY
+api_key = "sk-8440a58764c846c88183bfec2d94d279"
+
+# ====== 模型配置 ======
+# Anthropic Claude 模型
+# claude-sonnet-4-5-20250514 (推荐)
+# claude-sonnet-4-20250514
+# claude-3-5-sonnet-20241022
+# claude-3-5-haiku-20241022
+model = "qwen3-max"
+
+# OpenAI 模型示例
+# model = "gpt-4o"
+# model = "gpt-4o-mini"
+# model = "gpt-4-turbo"
+# model = "o1-preview"
+# model = "o1-mini"
+
+# Qwen (通义千问) 模型示例
+# model = "qwen-turbo"
+# model = "qwen-plus"
+# model = "qwen-max"
+# model = "qwen-max-longcontext"
+
+# DeepSeek 模型示例
+# model = "deepseek-chat"
+# model = "deepseek-coder"
+# model = "deepseek-reasoner"
+
+# GLM (智谱清言) 模型示例
+# model = "glm-4-plus"
+# model = "glm-4"
+# model = "glm-4-flash"
+# model = "glm-4-air"
+
+# Google Gemini 模型示例
+# model = "gemini-2.0-flash-exp"
+# model = "gemini-1.5-pro"
+
+# OpenRouter 模型示例
+# model = "anthropic/claude-sonnet-4"
+# model = "openai/gpt-4o"
+# model = "deepseek/deepseek-chat"
+
+# ====== 通用参数 ======
+max_tokens = 8192
+temperature = 0.7
+
+# ====== Base URL (可选) ======
+# 用于 openaicompat 或自定义 OpenAI 兼容 API
+# 默认值会根据 provider 自动设置
+# base_url = "https://your-custom-endpoint.com/v1"
+
+# ====== Azure 特定配置 (仅 Azure provider 需要) ======
+# azure_endpoint = "https://your-resource.openai.azure.com/"
+# azure_api_version = "2024-02-01"
+
+# ====== Bedrock 特定配置 (仅 Bedrock provider 需要) ======
+# bedrock_region = "us-east-1"
+
+# ====== Google Vertex AI 配置 (可选) ======
+# google_project = "your-project-id"
+# google_location = "us-central1"

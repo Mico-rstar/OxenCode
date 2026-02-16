@@ -17,7 +17,8 @@ type SentMessageSent struct{}
 
 // StreamStartMsg 开始流式输出的消息
 type StreamStartMsg struct {
-	MessageID string
+	MessageID    string
+	UserContent  string // 用户消息内容
 }
 
 // StreamDeltaMsg 流式输出增量消息
