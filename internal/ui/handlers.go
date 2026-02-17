@@ -201,9 +201,9 @@ func (m Model) handleSendMessage(msg SendMessage) (tea.Model, tea.Cmd) {
 	msgID := message.GenerateID()
 	m.currentMsgID = msgID
 
-	// 返回流式开始命令，携带用户消息内容
+	// 返回 ChatWithTools 开始命令，使用 ReAct 循环
 	return m, func() tea.Msg {
-		return StreamStartMsg{
+		return ChatWithToolsStartMsg{
 			MessageID:   msgID,
 			UserContent: msg.Content,
 		}
@@ -297,6 +297,69 @@ func (m Model) handleStreamError(msg StreamErrorMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.appState = StateError
+	return m, nil
+}
+
+// handleChatWithToolsStart 处理 ChatWithTools 开始（使用 ReAct 循环）
+func (m Model) handleChatWithToolsStart(msg ChatWithToolsStartMsg) (tea.Model, tea.Cmd) {
+	// 创建 AI 消息用于跟踪整个 ReAct 循环
+	aiMsg := message.NewStreamingMessage(message.RoleAssistant)
+	aiMsg.ID = msg.MessageID
+	m.messages = append(m.messages, aiMsg)
+	m.currentMsgID = msg.MessageID
+	m.appState = StateStreaming
+
+	// 添加初始 thought
+	aiMsg.AddReActStep("thought", "Processing user request: "+msg.UserContent)
+
+	// 验证输入
+	if m.agent == nil {
+		m.appState = StateError
+		aiMsg.SetError(fmt.Errorf("agent not available"))
+		return m, nil
+	}
+
+	if msg.UserContent == "" {
+		m.appState = StateError
+		aiMsg.SetError(fmt.Errorf("user message is empty"))
+		return m, nil
+	}
+
+	// 返回命令来异步执行 ChatWithTools
+	return m, func() tea.Msg {
+		// 执行 ChatWithTools（阻塞操作）
+		response, err := m.agent.ChatWithTools(m.ctx, msg.UserContent)
+
+		if err != nil {
+			return ChatWithToolsCompleteMsg{
+				MessageID: msg.MessageID,
+				Error:     err,
+			}
+		}
+
+		return ChatWithToolsCompleteMsg{
+			MessageID: msg.MessageID,
+			Response:  response,
+		}
+	}
+}
+
+// handleChatWithToolsComplete 处理 ChatWithTools 完成
+func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Model, tea.Cmd) {
+	// 查找并更新消息
+	for i := range m.messages {
+		if m.messages[i].ID == msg.MessageID {
+			if msg.Error != nil {
+				m.messages[i].SetError(msg.Error)
+				m.appState = StateError
+			} else {
+				m.messages[i].AppendContent(msg.Response)
+				m.messages[i].Complete()
+				m.appState = StateIdle
+			}
+			break
+		}
+	}
 	return m, nil
 }
 

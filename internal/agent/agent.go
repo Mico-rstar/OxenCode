@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
 	anthropic "charm.land/fantasy/providers/anthropic"
@@ -61,11 +63,17 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	log := logger.New("agent")
 
 	// 创建执行环境（MVP 版本使用本地环境）
-	workDir := "." // 可以从配置读取
+	// 使用配置中的工作目录，如果未配置则使用当前目录
+	workDir := cfg.WorkDir
+	if workDir == "" {
+		workDir = "."
+	}
 	env, err := tools.NewLocalEnvironment(workDir, log)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create environment: %w", err)
 	}
+
+	log.Info("Environment created", "workDir", workDir)
 
 	// 创建工具注册表
 	registry := tools.NewRegistry(log)
@@ -371,5 +379,237 @@ func (a *Agent) GetEnvironment() tools.Environment {
 // GetToolRegistry 获取工具注册表
 func (a *Agent) GetToolRegistry() *tools.Registry {
 	return a.toolRegistry
+}
+
+// ChatWithTools 进行支持工具调用的对话（简化版 ReAct 循环）
+// 这是一个同步方法，会自动处理工具调用直到完成
+func (a *Agent) ChatWithTools(ctx context.Context, userMessage string) (string, error) {
+	a.logger.Info("Starting ChatWithTools", "messageLength", len(userMessage))
+
+	// 创建新的消息用于跟踪 ReAct 循环
+	currentMsg := message.NewStreamingMessage(message.RoleAssistant)
+	currentMsg.AddReActStep("thought", "User is asking: "+userMessage)
+
+	// 添加用户消息到历史
+	userMsg := message.NewMessage(message.RoleUser, userMessage)
+	a.history = append(a.history, userMsg)
+
+	// 开始 ReAct 循环
+	maxIterations := 10 // 防止无限循环
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		a.logger.Debug("ReAct iteration", "iteration", iteration+1, "max", maxIterations)
+
+		// 构建消息列表，包含历史和工具调用结果
+		messages := a.buildMessagesWithTools()
+
+		// 获取工具名称列表
+		toolNames := a.toolRegistry.Names()
+
+		// 调用 LLM
+		result, err := a.agent.Generate(ctx, fantasy.AgentCall{
+			Prompt:       userMessage,
+			Messages:     messages,
+			ActiveTools: toolNames,
+		})
+
+		if err != nil {
+			a.logger.Error("LLM generation failed", "error", err)
+			currentMsg.SetError(err)
+			return "", fmt.Errorf("LLM generation failed: %w", err)
+		}
+
+		// 提取响应内容
+		content := result.Response.Content
+		if len(content) == 0 {
+			a.logger.Warn("LLM returned empty content")
+			currentMsg.Complete()
+			return "", nil
+		}
+
+		// 检查是否有工具调用
+		hasToolCalls := false
+		var responseText strings.Builder
+
+		// 遍历响应内容
+		for _, c := range content {
+			switch content := c.(type) {
+			case fantasy.TextContent:
+				// 文本内容
+				responseText.WriteString(content.Text)
+				currentMsg.AppendContent(content.Text)
+
+			case fantasy.ToolCallContent:
+				// 工具调用
+				hasToolCalls = true
+				a.logger.Info("Tool call requested", "tool", content.ToolName, "callID", content.ToolCallID)
+
+				// 添加 action 步骤
+				currentMsg.AddToolCall(content.ToolName, map[string]any{})
+
+				// 执行工具
+				toolOutput, err := a.executeToolCall(ctx, content)
+				if err != nil {
+					a.logger.Error("Tool execution failed", "tool", content.ToolName, "error", err)
+					currentMsg.UpdateToolCall(content.ToolName, err.Error(), message.StatusError, err.Error())
+
+					// 添加错误观察
+					currentMsg.AddReActStep("observation", fmt.Sprintf("Tool %s failed: %v", content.ToolName, err))
+
+					// 将工具结果添加到历史（用于下一轮）
+					toolResultMsg := message.NewMessage(message.RoleTool, fmt.Sprintf("Error: %v", err))
+					a.history = append(a.history, toolResultMsg)
+				} else {
+					a.logger.Info("Tool executed successfully", "tool", content.ToolName, "outputLength", len(toolOutput))
+					currentMsg.UpdateToolCall(content.ToolName, toolOutput, message.StatusCompleted, "")
+
+					// 添加观察步骤
+					// 限制观察内容长度
+					observation := toolOutput
+					if len(observation) > 500 {
+						observation = observation[:500] + "\n... (truncated)"
+					}
+					currentMsg.AddReActStep("observation", observation)
+
+					// 将工具结果添加到历史（用于下一轮）
+					toolResultMsg := message.NewMessage(message.RoleTool, toolOutput)
+					a.history = append(a.history, toolResultMsg)
+				}
+			}
+		}
+
+		// 如果没有工具调用，说明任务完成
+		if !hasToolCalls {
+			a.logger.Info("No tool calls, task completed")
+			finalResponse := responseText.String()
+			currentMsg.AppendContent(finalResponse)
+			currentMsg.Complete()
+
+			// 添加助手响应到历史
+			assistantMsg := message.NewMessage(message.RoleAssistant, finalResponse)
+			a.history = append(a.history, assistantMsg)
+
+			return finalResponse, nil
+		}
+
+		// 有工具调用，继续下一轮循环
+		a.logger.Debug("Continuing ReAct loop", "iteration", iteration+1)
+	}
+
+	a.logger.Warn("ReAct loop reached max iterations")
+	return "", fmt.Errorf("ReAct loop reached maximum iterations (%d)", maxIterations)
+}
+
+// ContinueReAct 继续执行 ReAct 循环（用于异步场景）
+func (a *Agent) ContinueReAct(ctx context.Context, currentMsg message.Message) (string, error) {
+	a.logger.Debug("ContinueReAct called")
+
+	// 构建消息
+	messages := a.buildMessagesWithTools()
+
+	// 获取工具名称列表
+	toolNames := a.toolRegistry.Names()
+
+	// 调用 LLM（不需要 prompt，继续之前的对话）
+	result, err := a.agent.Generate(ctx, fantasy.AgentCall{
+		Messages:     messages,
+		ActiveTools: toolNames,
+	})
+
+	if err != nil {
+		a.logger.Error("ContinueReAct LLM call failed", "error", err)
+		currentMsg.SetError(err)
+		return "", err
+	}
+
+	// 处理响应
+	content := result.Response.Content
+	if len(content) == 0 {
+		currentMsg.Complete()
+		return "", nil
+	}
+
+	// 处理工具调用或文本响应
+	hasToolCalls := false
+	var responseText strings.Builder
+
+	// 遍历响应内容
+	for _, c := range content {
+		switch content := c.(type) {
+		case fantasy.TextContent:
+			responseText.WriteString(content.Text)
+			currentMsg.AppendContent(content.Text)
+
+		case fantasy.ToolCallContent:
+			hasToolCalls = true
+			// 执行工具（与 ChatWithTools 相同的逻辑）
+			toolOutput, err := a.executeToolCall(ctx, content)
+			if err != nil {
+				currentMsg.UpdateToolCall(content.ToolName, err.Error(), message.StatusError, err.Error())
+				toolResultMsg := message.NewMessage(message.RoleTool, fmt.Sprintf("Error: %v", err))
+				a.history = append(a.history, toolResultMsg)
+			} else {
+				currentMsg.UpdateToolCall(content.ToolName, toolOutput, message.StatusCompleted, "")
+				toolResultMsg := message.NewMessage(message.RoleTool, toolOutput)
+				a.history = append(a.history, toolResultMsg)
+			}
+		}
+	}
+
+	if !hasToolCalls {
+		currentMsg.Complete()
+		return responseText.String(), nil
+	}
+
+	// 还有工具调用，返回空字符串表示需要继续
+	return "", nil
+}
+
+// executeToolCall 执行单个工具调用
+func (a *Agent) executeToolCall(ctx context.Context, toolCall fantasy.ToolCallContent) (string, error) {
+	// 解析工具输入参数
+	var input map[string]any
+	if err := json.Unmarshal([]byte(toolCall.Input), &input); err != nil {
+		a.logger.Error("Failed to parse tool input", "error", err, "input", toolCall.Input)
+		return "", fmt.Errorf("failed to parse tool input: %w", err)
+	}
+
+	// 执行工具
+	output, err := a.ExecuteTool(ctx, toolCall.ToolName, input)
+	if err != nil {
+		return "", err
+	}
+
+	return output, nil
+}
+
+// buildMessagesWithTools 构建包含工具调用结果的消息列表
+func (a *Agent) buildMessagesWithTools() []fantasy.Message {
+	messages := make([]fantasy.Message, 0, len(a.history))
+
+	for _, msg := range a.history {
+		switch msg.Role {
+		case message.RoleUser:
+			messages = append(messages, fantasy.NewUserMessage(msg.Content))
+
+		case message.RoleAssistant:
+			// Assistant 消息需要手动构建
+			messages = append(messages, fantasy.Message{
+				Role:    fantasy.MessageRoleAssistant,
+				Content: []fantasy.MessagePart{fantasy.TextPart{Text: msg.Content}},
+			})
+
+		case message.RoleSystem:
+			messages = append(messages, fantasy.NewSystemMessage(msg.Content))
+
+		case message.RoleTool:
+			// 工具结果消息
+			messages = append(messages, fantasy.Message{
+				Role:    fantasy.MessageRoleUser, // 工具结果作为用户消息发送
+				Content: []fantasy.MessagePart{fantasy.TextPart{Text: msg.Content}},
+			})
+		}
+	}
+
+	return messages
 }
 

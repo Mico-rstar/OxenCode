@@ -609,3 +609,63 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestChatWithTools 测试带工具的对话
+func TestChatWithTools(t *testing.T) {
+	cfg := &config.Config{
+		Provider:    config.ProviderQwen,
+		Model:       "qwen3-max",
+		MaxTokens:   4096,
+		Temperature: 0.7,
+	}
+
+	agent, err := NewAgent(cfg)
+	if err != nil {
+		t.Skipf("Skipping test: %v (requires API key)", err)
+		return
+	}
+
+	ctx := context.Background()
+
+	t.Run("Simple conversation without tools", func(t *testing.T) {
+		// 这个问题不需要工具调用
+		response, err := agent.ChatWithTools(ctx, "你好，请告诉我1+1等于几？")
+		if err != nil {
+			t.Errorf("ChatWithTools failed: %v", err)
+		}
+
+		if response == "" {
+			t.Error("Expected non-empty response")
+		}
+
+		t.Logf("Response: %s", response)
+	})
+
+	t.Run("Conversation requiring tool use", func(t *testing.T) {
+		// 这个问题可能需要使用 read 工具
+		response, err := agent.ChatWithTools(ctx, "请列出当前目录下的所有 .go 文件")
+		if err != nil {
+			t.Errorf("ChatWithTools failed: %v", err)
+		}
+
+		if response == "" {
+			t.Error("Expected non-empty response")
+		}
+
+		t.Logf("Response: %s", response)
+	})
+
+	t.Run("Complex task requiring multiple tools", func(t *testing.T) {
+		// 这个任务可能需要 glob + grep + read
+		response, err := agent.ChatWithTools(ctx, "请找出所有包含 'package main' 的 Go 文件")
+		if err != nil {
+			t.Errorf("ChatWithTools failed: %v", err)
+		}
+
+		if response == "" {
+			t.Error("Expected non-empty response")
+		}
+
+		t.Logf("Response: %s", response)
+	})
+}

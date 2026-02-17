@@ -15,6 +15,19 @@ type SendMessage struct {
 // SentMessageSent 消息发送完成的消息
 type SentMessageSent struct{}
 
+// ChatWithToolsStartMsg 开始使用工具的对话（ReAct 循环）
+type ChatWithToolsStartMsg struct {
+	MessageID   string
+	UserContent string // 用户消息内容
+}
+
+// ChatWithToolsCompleteMsg ChatWithTools 完成消息
+type ChatWithToolsCompleteMsg struct {
+	MessageID string
+	Response  string
+	Error     error
+}
+
 // StreamStartMsg 开始流式输出的消息
 type StreamStartMsg struct {
 	MessageID    string
@@ -41,8 +54,9 @@ type StreamErrorMsg struct {
 // ReActStepMsg ReAct步骤消息
 type ReActStepMsg struct {
 	MessageID string
-	StepType  string
+	StepType  string // "thought", "action", "observation"
 	Content   string
+	ToolName  string // 对于 action 类型
 }
 
 // ToolCallMsg 工具调用消息

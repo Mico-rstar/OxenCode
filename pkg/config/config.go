@@ -47,6 +47,9 @@ type Config struct {
 
 	// OpenAI 兼容 API 的 Base URL (Qwen, DeepSeek, GLM 等)
 	BaseURL string `mapstructure:"base_url"`
+
+	// 工作目录配置
+	WorkDir string `mapstructure:"work_dir"` // 工作目录，默认为当前目录
 }
 
 var cfg *Config
@@ -89,6 +92,7 @@ func Load() (*Config, error) {
 	v.SetDefault("model", "claude-sonnet-4-5-20250514")
 	v.SetDefault("max_tokens", 8192)
 	v.SetDefault("temperature", 0.7)
+	v.SetDefault("work_dir", ".")
 
 	// 尝试读取用户配置文件
 	configExists := true
@@ -126,11 +130,32 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// 处理工作目录：转换为绝对路径
+	if cfg.WorkDir != "" {
+		absPath, err := filepath.Abs(cfg.WorkDir)
+		if err != nil {
+			log.Error("Failed to resolve work directory to absolute path", "path", cfg.WorkDir, "error", err)
+			return nil, fmt.Errorf("failed to resolve work directory: %w", err)
+		}
+		cfg.WorkDir = absPath
+		log.Debug("Work directory resolved", "path", cfg.WorkDir)
+	} else {
+		// 默认使用当前目录
+		cwd, err := os.Getwd()
+		if err != nil {
+			log.Warn("Failed to get current directory", "error", err)
+		} else {
+			cfg.WorkDir = cwd
+			log.Debug("Using current directory as work directory", "path", cwd)
+		}
+	}
+
 	log.Info("Configuration loaded",
 		"provider", cfg.Provider,
 		"model", cfg.Model,
 		"max_tokens", cfg.MaxTokens,
 		"temperature", cfg.Temperature,
+		"work_dir", cfg.WorkDir,
 	)
 
 	// 验证配置

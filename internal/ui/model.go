@@ -191,6 +191,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SendMessage:
 		return m.handleSendMessage(msg)
 
+	case ChatWithToolsStartMsg:
+		return m.handleChatWithToolsStart(msg)
+
+	case ChatWithToolsCompleteMsg:
+		return m.handleChatWithToolsComplete(msg)
+
 	case StreamStartMsg:
 		return m.handleStreamStart(msg)
 

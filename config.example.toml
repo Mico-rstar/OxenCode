@@ -62,6 +62,14 @@ model = "qwen3-max"
 max_tokens = 8192
 temperature = 0.7
 
+# ====== 工作目录 (可选) ======
+# 指定工具操作的工作目录
+# 可以使用相对路径或绝对路径
+# 相对路径会自动转换为绝对路径
+# 默认值: "." (当前目录)
+# work_dir = "/home/user/projects/myproject"
+work_dir = "./test"
+
 # ====== Base URL (可选) ======
 # 用于 openaicompat 或自定义 OpenAI 兼容 API
 # 默认值会根据 provider 自动设置

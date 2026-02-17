@@ -49,3 +49,5 @@ debug.test
 # Build output
 dist/
 build/
+
+test/
