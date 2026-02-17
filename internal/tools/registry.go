@@ -15,12 +15,12 @@ import (
 type Registry struct {
 	mu     sync.RWMutex
 	tools  map[string]Tool
-	logger *logger.Logger
+	logger logger.Logger
 }
 
 // NewRegistry 创建新的工具注册表
 // logger 是可选的，如果传入 nil 则创建基于全局 logger 的实例
-func NewRegistry(log *logger.Logger) *Registry {
+func NewRegistry(log logger.Logger) *Registry {
 	if log == nil {
 		log = logger.New("registry")
 	}

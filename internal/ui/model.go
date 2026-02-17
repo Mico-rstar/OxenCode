@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/yourname/oxencode/internal/agent"
-	"github.com/yourname/oxencode/internal/config"
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/internal/message"
 )
 

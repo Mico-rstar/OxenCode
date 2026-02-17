@@ -1,15 +1,32 @@
 package logger
 
-import (
-	"os"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-)
+// Logger 统一的日志记录器接口
+// 定义了项目所需的核心日志方法
+type Logger interface {
+	// Debug 记录调试级别日志
+	Debug(msg string, args ...interface{})
 
-var (
-	// Log 全局日志实例
-	Log *zap.Logger
-)
+	// Info 记录信息级别日志
+	Info(msg string, args ...interface{})
+
+	// Warn 记录警告级别日志
+	Warn(msg string, args ...interface{})
+
+	// Error 记录错误级别日志
+	Error(msg string, args ...interface{})
+
+	// Fatal 记录致命错误日志后退出程序
+	Fatal(msg string, args ...interface{})
+
+	// Named 创建子 logger（用于命名空间）
+	Named(name string) Logger
+
+	// With 创建带字段的 logger
+	With(args ...interface{}) Logger
+
+	// Sync 同步日志缓冲区
+	Sync() error
+}
 
 // Config 日志配置
 type Config struct {
@@ -27,75 +44,79 @@ func DefaultConfig() *Config {
 	}
 }
 
-// Init 初始化日志系统
-func Init(cfg *Config) error {
-	if cfg == nil {
-		cfg = DefaultConfig()
-	}
+// global logger instance
+var global Logger
 
-	// 解析日志级别
-	level, err := zapcore.ParseLevel(cfg.Level)
-	if err != nil {
-		level = zapcore.InfoLevel
-	}
-
-	// 编码器配置
-	var encoderConfig zapcore.EncoderConfig
-	if cfg.DevMode {
-		// 开发模式：使用友好的格式
-		encoderConfig = zap.NewDevelopmentEncoderConfig()
-	} else {
-		// 生产模式：使用 JSON 格式
-		encoderConfig = zap.NewProductionEncoderConfig()
-	}
-	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-
-	// 输出配置
-	var writer zapcore.WriteSyncer
-	if cfg.OutputPath != "" {
-		file, err := os.OpenFile(cfg.OutputPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return err
-		}
-		writer = zapcore.AddSync(file)
-	} else {
-		writer = zapcore.AddSync(os.Stdout)
-	}
-
-	// 创建 Core
-	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderConfig),
-		writer,
-		level,
-	)
-
-	// 创建 Logger
-	Log = zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
-
-	return nil
+// SetGlobal 设置全局 logger
+func SetGlobal(l Logger) {
+	global = l
 }
 
-// InitFromEnv 从环境变量初始化
-func InitFromEnv() error {
-	cfg := &Config{
-		Level:      getEnv("LOG_LEVEL", "info"),
-		DevMode:    getEnv("LOG_DEV", "true") == "true",
-		OutputPath: getEnv("LOG_FILE", "debug.log"),
-	}
-	return Init(cfg)
+// GetGlobal 获取全局 logger
+func GetGlobal() Logger {
+	return global
 }
 
-// Sync 同步日志缓冲区
+// New 创建命名 logger（使用全局 logger）
+func New(name string) Logger {
+	if global == nil {
+		return &noopLogger{}
+	}
+	return global.Named(name)
+}
+
+// === 全局便捷函数 ===
+
+// Debug 记录调试级别日志（使用全局 logger）
+func Debug(msg string, args ...interface{}) {
+	if global != nil {
+		global.Debug(msg, args...)
+	}
+}
+
+// Info 记录信息级别日志（使用全局 logger）
+func Info(msg string, args ...interface{}) {
+	if global != nil {
+		global.Info(msg, args...)
+	}
+}
+
+// Warn 记录警告级别日志（使用全局 logger）
+func Warn(msg string, args ...interface{}) {
+	if global != nil {
+		global.Warn(msg, args...)
+	}
+}
+
+// Error 记录错误级别日志（使用全局 logger）
+func Error(msg string, args ...interface{}) {
+	if global != nil {
+		global.Error(msg, args...)
+	}
+}
+
+// Fatal 记录致命错误日志后退出程序（使用全局 logger）
+func Fatal(msg string, args ...interface{}) {
+	if global != nil {
+		global.Fatal(msg, args...)
+	}
+}
+
+// Sync 同步全局日志缓冲区
 func Sync() {
-	if Log != nil {
-		_ = Log.Sync()
+	if global != nil {
+		_ = global.Sync()
 	}
 }
 
-// getEnv 获取环境变量，提供默认值
-func getEnv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
-}
+// noopLogger no-op logger 实现，用于未初始化的情况
+type noopLogger struct{}
+
+func (n *noopLogger) Debug(msg string, args ...interface{})                                   {}
+func (n *noopLogger) Info(msg string, args ...interface{})                                    {}
+func (n *noopLogger) Warn(msg string, args ...interface{})                                    {}
+func (n *noopLogger) Error(msg string, args ...interface{})                                   {}
+func (n *noopLogger) Fatal(msg string, args ...interface{})                                   {}
+func (n *noopLogger) Named(name string) Logger                                                { return n }
+func (n *noopLogger) With(args ...interface{}) Logger                                         { return n }
+func (n *noopLogger) Sync() error                                                              { return nil }

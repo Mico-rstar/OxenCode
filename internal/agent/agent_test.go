@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourname/oxencode/internal/config"
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/internal/message"
 )
 

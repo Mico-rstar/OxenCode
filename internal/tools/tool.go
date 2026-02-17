@@ -40,12 +40,12 @@ type BaseTool struct {
 	description string
 	parameters  json.RawMessage
 	env         Environment
-	logger      *logger.Logger
+	logger      logger.Logger
 }
 
 // NewBaseTool 创建基础工具
 // logger 是可选的，如果传入 nil 则创建基于全局 logger 的实例
-func NewBaseTool(name, description string, parameters json.RawMessage, env Environment, log *logger.Logger) *BaseTool {
+func NewBaseTool(name, description string, parameters json.RawMessage, env Environment, log logger.Logger) *BaseTool {
 	if log == nil {
 		log = logger.New("tool." + name)
 	} else {

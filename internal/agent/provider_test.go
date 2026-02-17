@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/yourname/oxencode/internal/config"
+	"github.com/yourname/oxencode/pkg/config"
 )
 
 // TestQwenProvider 测试 Qwen provider 创建

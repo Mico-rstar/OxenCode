@@ -14,7 +14,7 @@ import (
 	openrouter "charm.land/fantasy/providers/openrouter"
 	vercel "charm.land/fantasy/providers/vercel"
 
-	"github.com/yourname/oxencode/internal/config"
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/internal/message"
 )
 

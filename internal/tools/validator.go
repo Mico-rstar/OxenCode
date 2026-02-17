@@ -11,12 +11,12 @@ import (
 // 使用 JSON Schema 验证工具输入参数
 type Validator struct {
 	schema json.RawMessage
-	logger *logger.Logger
+	logger logger.Logger
 }
 
 // NewValidator 创建参数验证器
 // logger 是可选的，如果传入 nil 则创建基于全局 logger 的实例
-func NewValidator(schema json.RawMessage, log *logger.Logger) *Validator {
+func NewValidator(schema json.RawMessage, log logger.Logger) *Validator {
 	if log == nil {
 		log = logger.New("validator")
 	}

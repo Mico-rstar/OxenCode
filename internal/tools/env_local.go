@@ -15,13 +15,13 @@ import (
 // 这是 MVP 版本的默认环境实现，直接使用本地文件系统
 type LocalEnvironment struct {
 	basePath string         // 工作根目录（绝对路径）
-	logger   *logger.Logger // 封装的日志记录器
+	logger   logger.Logger // 封装的日志记录器
 }
 
 // NewLocalEnvironment 创建本地环境
 // basePath 可以是相对路径或绝对路径，会被转换为绝对路径
 // logger 是可选的，如果传入 nil 则创建基于全局 logger 的实例
-func NewLocalEnvironment(basePath string, log *logger.Logger) (*LocalEnvironment, error) {
+func NewLocalEnvironment(basePath string, log logger.Logger) (*LocalEnvironment, error) {
 	// 如果没有提供 logger，使用全局 logger 创建一个
 	if log == nil {
 		log = logger.New("env.local")
