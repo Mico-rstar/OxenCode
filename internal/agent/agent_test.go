@@ -445,3 +445,167 @@ func BenchmarkBuildMessages(b *testing.B) {
 		_ = agent.buildMessages()
 	}
 }
+
+// TestAgentWithTools 测试 Agent 的工具集成
+func TestAgentWithTools(t *testing.T) {
+	// 使用 mock config 来避免需要 API key
+	cfg := &config.Config{
+		Provider:    config.ProviderQwen,
+		Model:       "qwen3-max",
+		MaxTokens:   4096,
+		Temperature: 0.7,
+	}
+
+	agent, err := NewAgent(cfg)
+	if err != nil {
+		t.Skipf("Skipping test: %v (requires API key)", err)
+		return
+	}
+
+	t.Run("Agent has tool registry", func(t *testing.T) {
+		if agent.toolRegistry == nil {
+			t.Error("Agent should have tool registry")
+		}
+	})
+
+	t.Run("Agent has environment", func(t *testing.T) {
+		if agent.env == nil {
+			t.Error("Agent should have environment")
+		}
+	})
+
+	t.Run("P0 tools are registered", func(t *testing.T) {
+		tools := agent.toolRegistry.Names()
+		expectedTools := []string{"glob", "grep", "read"}
+
+		for _, expected := range expectedTools {
+			found := false
+			for _, name := range tools {
+				if name == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Expected tool %s not registered", expected)
+			}
+		}
+	})
+
+	t.Run("GetToolSchemas returns schemas", func(t *testing.T) {
+		schemas := agent.GetToolSchemas()
+
+		if len(schemas) == 0 {
+			t.Error("Expected at least one tool schema")
+		}
+
+		// 验证每个 schema 有必要的字段
+		for _, schema := range schemas {
+			if _, ok := schema["name"]; !ok {
+				t.Error("Tool schema should have 'name' field")
+			}
+			if _, ok := schema["description"]; !ok {
+				t.Error("Tool schema should have 'description' field")
+			}
+			if _, ok := schema["input_schema"]; !ok {
+				t.Error("Tool schema should have 'input_schema' field")
+			}
+		}
+	})
+}
+
+// TestExecuteTool 测试工具执行
+func TestExecuteTool(t *testing.T) {
+	cfg := &config.Config{
+		Provider:    config.ProviderQwen,
+		Model:       "qwen3-max",
+		MaxTokens:   4096,
+		Temperature: 0.7,
+	}
+
+	agent, err := NewAgent(cfg)
+	if err != nil {
+		t.Skipf("Skipping test: %v (requires API key)", err)
+		return
+	}
+
+	ctx := context.Background()
+
+	t.Run("Execute glob tool", func(t *testing.T) {
+		result, err := agent.ExecuteTool(ctx, "glob", map[string]any{
+			"pattern": "*.go",
+		})
+
+		if err != nil {
+			t.Errorf("ExecuteTool failed: %v", err)
+		}
+
+		if result == "" {
+			t.Error("Expected non-empty result")
+		}
+
+		t.Logf("Glob result: %s", result)
+	})
+
+	t.Run("Execute grep tool", func(t *testing.T) {
+		result, err := agent.ExecuteTool(ctx, "grep", map[string]any{
+			"pattern":      "package",
+			"file_pattern": "*.go",
+		})
+
+		if err != nil {
+			t.Errorf("ExecuteTool failed: %v", err)
+		}
+
+		if result == "" {
+			t.Error("Expected non-empty result")
+		}
+
+		t.Logf("Grep result: %s", result)
+	})
+
+	t.Run("Execute read tool", func(t *testing.T) {
+		result, err := agent.ExecuteTool(ctx, "read", map[string]any{
+			"file_path": "agent_test.go",
+			"limit":     10,
+		})
+
+		if err != nil {
+			t.Errorf("ExecuteTool failed: %v", err)
+		}
+
+		if result == "" {
+			t.Error("Expected non-empty result")
+		}
+
+		t.Logf("Read result (first 100 chars): %s...", result[:min(100, len(result))])
+	})
+
+	t.Run("Execute non-existent tool", func(t *testing.T) {
+		_, err := agent.ExecuteTool(ctx, "nonexistent", map[string]any{})
+
+		if err == nil {
+			t.Error("Expected error for non-existent tool")
+		}
+
+		if err.Error() != "tool not found: nonexistent" {
+			t.Errorf("Unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("Execute tool with invalid parameters", func(t *testing.T) {
+		// read tool requires file_path
+		_, err := agent.ExecuteTool(ctx, "read", map[string]any{})
+
+		if err == nil {
+			t.Error("Expected error for missing parameters")
+		}
+	})
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

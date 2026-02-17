@@ -15,14 +15,19 @@ import (
 	vercel "charm.land/fantasy/providers/vercel"
 
 	"github.com/yourname/oxencode/pkg/config"
+	"github.com/yourname/oxencode/pkg/logger"
 	"github.com/yourname/oxencode/internal/message"
+	"github.com/yourname/oxencode/internal/tools"
 )
 
 // Agent AI Agent 核心结构
 type Agent struct {
-	agent   fantasy.Agent
-	config  *config.Config
-	history []message.Message // 对话历史
+	agent         fantasy.Agent
+	config        *config.Config
+	history       []message.Message // 对话历史
+	toolRegistry  *tools.Registry   // 工具注册表
+	env           tools.Environment // 执行环境
+	logger        logger.Logger     // 日志记录器
 }
 
 // NewAgent 创建新的 Agent 实例
@@ -52,12 +57,35 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		fantasy.WithTemperature(cfg.Temperature),
 	)
 
+	// 创建 logger
+	log := logger.New("agent")
+
+	// 创建执行环境（MVP 版本使用本地环境）
+	workDir := "." // 可以从配置读取
+	env, err := tools.NewLocalEnvironment(workDir, log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create environment: %w", err)
+	}
+
+	// 创建工具注册表
+	registry := tools.NewRegistry(log)
+
+	// 注册 P0 工具
+	registry.Register(tools.NewGlobTool(env, log))
+	registry.Register(tools.NewGrepTool(env, log))
+	registry.Register(tools.NewReadTool(env, log))
+
+	log.Info("Tools registered", "count", len(registry.Names()))
+
 	return &Agent{
-		agent:   agent,
-		config:  cfg,
+		agent:        agent,
+		config:       cfg,
 		history: []message.Message{
 			message.NewMessage(message.RoleSystem, "You are a helpful AI programming assistant."),
 		},
+		toolRegistry: registry,
+		env:          env,
+		logger:       log,
 	}, nil
 }
 
@@ -299,5 +327,49 @@ func (a *Agent) SetSystemPrompt(prompt string) {
 	newHistory = append([]message.Message{systemMsg}, newHistory...)
 
 	a.history = newHistory
+}
+
+// ExecuteTool 执行工具调用
+func (a *Agent) ExecuteTool(ctx context.Context, toolName string, input map[string]any) (string, error) {
+	a.logger.Debug("Executing tool", "tool", toolName, "input", input)
+
+	// 获取工具
+	tool := a.toolRegistry.Get(toolName)
+	if tool == nil {
+		a.logger.Error("Tool not found", "tool", toolName)
+		return "", fmt.Errorf("tool not found: %s", toolName)
+	}
+
+	// 参数验证
+	if err := tool.Validate(input); err != nil {
+		a.logger.Error("Parameter validation failed", "tool", toolName, "error", err)
+		return "", fmt.Errorf("parameter validation failed: %w", err)
+	}
+
+	// 执行工具
+	output, err := tool.Execute(ctx, input)
+	if err != nil {
+		a.logger.Error("Tool execution failed", "tool", toolName, "error", err)
+		return "", fmt.Errorf("tool execution failed: %w", err)
+	}
+
+	a.logger.Info("Tool executed successfully", "tool", toolName, "outputLength", len(output))
+
+	return output, nil
+}
+
+// GetToolSchemas 获取所有工具的 schema（用于传递给 LLM）
+func (a *Agent) GetToolSchemas() []map[string]any {
+	return a.toolRegistry.GetToolSchemas()
+}
+
+// GetEnvironment 获取执行环境
+func (a *Agent) GetEnvironment() tools.Environment {
+	return a.env
+}
+
+// GetToolRegistry 获取工具注册表
+func (a *Agent) GetToolRegistry() *tools.Registry {
+	return a.toolRegistry
 }
 

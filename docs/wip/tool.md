@@ -1251,11 +1251,11 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 ## 9. 实现优先级
 
 ### Phase 3.1: 核心框架
-- [ ] 执行环境接口 (`internal/tools/env.go`)
-- [ ] 本地文件系统环境 (`internal/tools/env_local.go`)
-- [ ] 工具接口定义 (`internal/tools/tool.go`)
-- [ ] 工具注册表 (`internal/tools/registry.go`)
-- [ ] 参数验证器 (`internal/tools/validator.go`)
+- [x] 执行环境接口 (`internal/tools/env.go`)
+- [x] 本地文件系统环境 (`internal/tools/env_local.go`)
+- [x] 工具接口定义 (`internal/tools/tool.go`)
+- [x] 工具注册表 (`internal/tools/registry.go`)
+- [x] 参数验证器 (`internal/tools/validator.go`)
 
 ### Phase 3.2: P0 工具
 - [ ] Glob 工具 (`internal/tools/glob.go`)
