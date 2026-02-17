@@ -1258,14 +1258,14 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 - [x] 参数验证器 (`internal/tools/validator.go`)
 
 ### Phase 3.2: P0 工具
-- [ ] Glob 工具 (`internal/tools/glob.go`)
-- [ ] Grep 工具 (`internal/tools/grep.go`)
-- [ ] Read 工具 (`internal/tools/read.go`)
+- [x] Glob 工具 (`internal/tools/glob.go`)
+- [x] Grep 工具 (`internal/tools/grep.go`)
+- [x] Read 工具 (`internal/tools/read.go`)
 
 ### Phase 3.3: ReAct 循环
-- [ ] Agent 工具调用方法 (`internal/agent/agent.go`)
-- [ ] TUI 工具消息处理 (`internal/ui/handlers.go`)
-- [ ] ReAct 消息流集成
+- [x] Agent 工具调用方法 (`internal/agent/agent.go`)
+- [x] TUI 工具消息处理 (`internal/ui/handlers.go`)
+- [x] ReAct 消息流集成
 
 ### Phase 3.4: P1 工具
 - [ ] Bash 工具 (`internal/tools/bash.go`)

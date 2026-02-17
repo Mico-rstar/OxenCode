@@ -19,6 +19,7 @@ import (
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
 	"github.com/yourname/oxencode/internal/message"
+	"github.com/yourname/oxencode/internal/prompt"
 	"github.com/yourname/oxencode/internal/tools"
 )
 
@@ -85,16 +86,51 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 
 	log.Info("Tools registered", "count", len(registry.Names()))
 
+	// 加载系统提示词
+	systemPrompt := loadSystemPrompt(cfg, log)
+
 	return &Agent{
 		agent:        agent,
 		config:       cfg,
 		history: []message.Message{
-			message.NewMessage(message.RoleSystem, "You are a helpful AI programming assistant."),
+			message.NewMessage(message.RoleSystem, systemPrompt),
 		},
 		toolRegistry: registry,
 		env:          env,
 		logger:       log,
 	}, nil
+}
+
+// loadSystemPrompt 加载系统提示词
+func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
+	// 尝试从 prompt 目录加载
+	promptDir := cfg.PromptDir
+	if promptDir == "" {
+		promptDir = "internal/prompt"
+	}
+
+	loader := prompt.NewLoader(promptDir)
+	systemPrompt, err := loader.Load()
+	if err != nil {
+		log.Warn("Failed to load system prompt from file, using default", "error", err, "promptDir", promptDir)
+		return getDefaultSystemPrompt()
+	}
+
+	log.Info("System prompt loaded", "source", promptDir, "length", len(systemPrompt))
+	return systemPrompt
+}
+
+// getDefaultSystemPrompt 获取默认系统提示词
+func getDefaultSystemPrompt() string {
+	return "You are a helpful AI programming assistant."
+}
+
+// ReloadSystemPrompt 重新加载系统提示词
+func (a *Agent) ReloadSystemPrompt() error {
+	newPrompt := loadSystemPrompt(a.config, a.logger)
+	a.SetSystemPrompt(newPrompt)
+	a.logger.Info("System prompt reloaded")
+	return nil
 }
 
 // createProvider 根据 provider 类型创建对应的 provider

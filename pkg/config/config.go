@@ -50,6 +50,9 @@ type Config struct {
 
 	// 工作目录配置
 	WorkDir string `mapstructure:"work_dir"` // 工作目录，默认为当前目录
+
+	// 系统提示词配置
+	PromptDir string `mapstructure:"prompt_dir"` // 系统提示词目录，默认为 internal/prompt
 }
 
 var cfg *Config
@@ -93,6 +96,7 @@ func Load() (*Config, error) {
 	v.SetDefault("max_tokens", 8192)
 	v.SetDefault("temperature", 0.7)
 	v.SetDefault("work_dir", ".")
+	v.SetDefault("prompt_dir", "internal/prompt")
 
 	// 尝试读取用户配置文件
 	configExists := true
