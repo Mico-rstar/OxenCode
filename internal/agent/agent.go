@@ -88,6 +88,15 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	registry.Register(grepTool)
 	registry.Register(readTool)
 
+	// 注册 P1 工具
+	bashTool := tools.NewBashTool(env, log)
+	writeTool := tools.NewWriteTool(env, log)
+	editTool := tools.NewEditTool(env, log)
+
+	registry.Register(bashTool)
+	registry.Register(writeTool)
+	registry.Register(editTool)
+
 	log.Info("Tools registered", "count", len(registry.Names()))
 
 	// 将工具转换为 fantasy.AgentTool
