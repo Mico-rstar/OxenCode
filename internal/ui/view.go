@@ -140,6 +140,13 @@ func (m Model) renderReActStep(step message.ReActStep, isLast bool) string {
 		} else {
 			content = step.Content
 		}
+	case "observation":
+		// observation 显示为工具结果
+		content = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			m.styles.IconSuccess.Render(IconSuccess),
+			" "+step.Content,
+		)
 	default:
 		content = step.Content
 	}

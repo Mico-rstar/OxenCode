@@ -33,6 +33,13 @@ type Agent struct {
 	logger        logger.Logger     // 日志记录器
 }
 
+// ProgressUpdate 进度更新类型
+type ProgressUpdate struct {
+	Type    string // "thought", "action", "observation", "content", "error", "done"
+	Content string
+	ToolName string // 仅用于 action 类型
+}
+
 // NewAgent 创建新的 Agent 实例
 func NewAgent(cfg *config.Config) (*Agent, error) {
 	// 获取 API Key
@@ -52,13 +59,6 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get language model: %w", err)
 	}
-
-	// 创建 Agent (不在构造时设置系统提示)
-	agent := fantasy.NewAgent(
-		model,
-		fantasy.WithMaxOutputTokens(int64(cfg.MaxTokens)),
-		fantasy.WithTemperature(cfg.Temperature),
-	)
 
 	// 创建 logger
 	log := logger.New("agent")
@@ -80,11 +80,26 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	registry := tools.NewRegistry(log)
 
 	// 注册 P0 工具
-	registry.Register(tools.NewGlobTool(env, log))
-	registry.Register(tools.NewGrepTool(env, log))
-	registry.Register(tools.NewReadTool(env, log))
+	globTool := tools.NewGlobTool(env, log)
+	grepTool := tools.NewGrepTool(env, log)
+	readTool := tools.NewReadTool(env, log)
+
+	registry.Register(globTool)
+	registry.Register(grepTool)
+	registry.Register(readTool)
 
 	log.Info("Tools registered", "count", len(registry.Names()))
+
+	// 将工具转换为 fantasy.AgentTool
+	fantasyTools := tools.ToolsToAgentTools(registry.List())
+
+	// 创建 Agent 并注册工具
+	agent := fantasy.NewAgent(
+		model,
+		fantasy.WithMaxOutputTokens(int64(cfg.MaxTokens)),
+		fantasy.WithTemperature(cfg.Temperature),
+		fantasy.WithTools(fantasyTools...),
+	)
 
 	// 加载系统提示词
 	systemPrompt := loadSystemPrompt(cfg, log)
@@ -533,6 +548,156 @@ func (a *Agent) ChatWithTools(ctx context.Context, userMessage string) (string, 
 
 	a.logger.Warn("ReAct loop reached max iterations")
 	return "", fmt.Errorf("ReAct loop reached maximum iterations (%d)", maxIterations)
+}
+
+// ChatWithToolsWithProgress 进行支持工具调用的对话（带进度更新）
+// 返回一个 channel 用于异步推送进度更新和完成信号
+// 进度更新类型：thought, action, observation, content, error, done
+func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage string) <-chan ProgressUpdate {
+	ch := make(chan ProgressUpdate, 100)
+
+	go func() {
+		defer close(ch)
+
+		a.logger.Info("Starting ChatWithToolsWithProgress", "messageLength", len(userMessage))
+
+		// 辅助函数：发送进度更新
+		sendProgress := func(updateType, content string, toolName string) {
+			select {
+			case ch <- ProgressUpdate{Type: updateType, Content: content, ToolName: toolName}:
+			case <-ctx.Done():
+			}
+		}
+
+		// 发送初始 thought
+		sendProgress("thought", "User is asking: "+userMessage, "")
+
+		// 添加用户消息到历史
+		userMsg := message.NewMessage(message.RoleUser, userMessage)
+		a.history = append(a.history, userMsg)
+
+		// 开始 ReAct 循环
+		maxIterations := 10 // 防止无限循环
+		for iteration := 0; iteration < maxIterations; iteration++ {
+			// 检查 context 取消
+			select {
+			case <-ctx.Done():
+				sendProgress("error", ctx.Err().Error(), "")
+				return
+			default:
+			}
+
+			a.logger.Debug("ReAct iteration", "iteration", iteration+1, "max", maxIterations)
+
+			// 构建消息列表，包含历史和工具调用结果
+			messages := a.buildMessagesWithTools()
+
+			// 获取工具名称列表
+			toolNames := a.toolRegistry.Names()
+
+			// 调用 LLM
+			result, err := a.agent.Generate(ctx, fantasy.AgentCall{
+				Prompt:       userMessage,
+				Messages:     messages,
+				ActiveTools: toolNames,
+			})
+
+			if err != nil {
+				a.logger.Error("LLM generation failed", "error", err)
+				sendProgress("error", err.Error(), "")
+				return
+			}
+
+			// 提取响应内容
+			content := result.Response.Content
+			if len(content) == 0 {
+				a.logger.Warn("LLM returned empty content")
+				sendProgress("done", "", "")
+				return
+			}
+
+			// 检查是否有工具调用
+			hasToolCalls := false
+			var responseText strings.Builder
+
+			// 遍历响应内容
+			for _, c := range content {
+				switch content := c.(type) {
+				case fantasy.TextContent:
+					// 文本内容
+					responseText.WriteString(content.Text)
+					sendProgress("content", content.Text, "")
+
+				case fantasy.ToolCallContent:
+					// 工具调用
+					hasToolCalls = true
+					a.logger.Info("Tool call requested", "tool", content.ToolName, "callID", content.ToolCallID)
+
+					// 解析工具输入
+					var toolInput map[string]any
+					if err := json.Unmarshal([]byte(content.Input), &toolInput); err != nil {
+						a.logger.Warn("Failed to parse tool input", "error", err)
+						toolInput = map[string]any{}
+					}
+
+					// 发送 action 步骤
+					inputStr := fmt.Sprintf("%v", toolInput)
+					sendProgress("action", inputStr, content.ToolName)
+
+					// 执行工具
+					toolOutput, err := a.executeToolCall(ctx, content)
+					if err != nil {
+						a.logger.Error("Tool execution failed", "tool", content.ToolName, "error", err)
+
+						// 发送错误观察
+						errorMsg := fmt.Sprintf("Tool %s failed: %v", content.ToolName, err)
+						sendProgress("observation", errorMsg, content.ToolName)
+
+						// 将工具结果添加到历史（用于下一轮）
+						toolResultMsg := message.NewMessage(message.RoleTool, fmt.Sprintf("Error: %v", err))
+						a.history = append(a.history, toolResultMsg)
+					} else {
+						a.logger.Info("Tool executed successfully", "tool", content.ToolName, "outputLength", len(toolOutput))
+
+						// 发送观察步骤
+						// 限制观察内容长度
+						observation := toolOutput
+						if len(observation) > 500 {
+							observation = observation[:500] + "\n... (truncated)"
+						}
+						sendProgress("observation", observation, content.ToolName)
+
+						// 将工具结果添加到历史（用于下一轮）
+						toolResultMsg := message.NewMessage(message.RoleTool, toolOutput)
+						a.history = append(a.history, toolResultMsg)
+					}
+				}
+			}
+
+			// 如果没有工具调用，说明任务完成
+			if !hasToolCalls {
+				a.logger.Info("No tool calls, task completed")
+				finalResponse := responseText.String()
+
+				// 添加助手响应到历史
+				assistantMsg := message.NewMessage(message.RoleAssistant, finalResponse)
+				a.history = append(a.history, assistantMsg)
+
+				// 发送完成信号
+				sendProgress("done", finalResponse, "")
+				return
+			}
+
+			// 有工具调用，继续下一轮循环
+			a.logger.Debug("Continuing ReAct loop", "iteration", iteration+1)
+		}
+
+		// 达到最大迭代次数
+		a.logger.Warn("ReAct loop reached max iterations")
+		sendProgress("error", fmt.Sprintf("ReAct loop reached maximum iterations (%d)", maxIterations), "")
+	}()
+
+	return ch
 }
 
 // ContinueReAct 继续执行 ReAct 循环（用于异步场景）

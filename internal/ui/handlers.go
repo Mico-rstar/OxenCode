@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/yourname/oxencode/internal/agent"
 	"github.com/yourname/oxencode/internal/message"
 )
 
@@ -250,7 +251,7 @@ func (m Model) handleStreamDelta(msg StreamDeltaMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// 继续等待下一个流式数据
+	// 继续等待原来的流式数据（用于 ChatStream，不是 ChatWithToolsWithProgress）
 	return m, m.waitForStreamData(msg.MessageID)
 }
 
@@ -309,9 +310,6 @@ func (m Model) handleChatWithToolsStart(msg ChatWithToolsStartMsg) (tea.Model, t
 	m.currentMsgID = msg.MessageID
 	m.appState = StateStreaming
 
-	// 添加初始 thought
-	aiMsg.AddReActStep("thought", "Processing user request: "+msg.UserContent)
-
 	// 验证输入
 	if m.agent == nil {
 		m.appState = StateError
@@ -325,27 +323,74 @@ func (m Model) handleChatWithToolsStart(msg ChatWithToolsStartMsg) (tea.Model, t
 		return m, nil
 	}
 
-	// 返回命令来异步执行 ChatWithTools
-	return m, func() tea.Msg {
-		// 执行 ChatWithTools（阻塞操作）
-		response, err := m.agent.ChatWithTools(m.ctx, msg.UserContent)
+	// 调用 Agent 获取 channel（Agent 负责创建）
+	progressCh := m.agent.ChatWithToolsWithProgress(m.ctx, msg.UserContent)
 
-		if err != nil {
+	// 保存 channel 引用到 Model
+	m.currentProgressCh = progressCh
+
+	// 返回命令来监听 channel
+	return m, waitForAgentProgress(msg.MessageID, progressCh)
+}
+
+// waitForAgentProgress 等待进度更新（单一 channel 模式）
+func waitForAgentProgress(messageID string, progressCh <-chan agent.ProgressUpdate) tea.Cmd {
+	return func() tea.Msg {
+		update, ok := <-progressCh
+		if !ok {
+			// Channel 关闭，正常结束
+			return nil
+		}
+
+		switch update.Type {
+		case "thought":
+			return ReActStepMsg{
+				MessageID: messageID,
+				StepType:  "thought",
+				Content:   update.Content,
+			}
+		case "action":
+			return ReActStepMsg{
+				MessageID: messageID,
+				StepType:  "action",
+				Content:   update.Content,
+				ToolName:  update.ToolName,
+			}
+		case "observation":
+			return ReActStepMsg{
+				MessageID: messageID,
+				StepType:  "observation",
+				Content:   update.Content,
+				ToolName:  update.ToolName,
+			}
+		case "content":
+			// 在 ReAct 循环中，content 应该作为 thinking 步骤显示
+			// 只有 done 消息中的内容才是最终回答
+			return ReActStepMsg{
+				MessageID: messageID,
+				StepType:  "thought",
+				Content:   update.Content,
+			}
+		case "error":
 			return ChatWithToolsCompleteMsg{
-				MessageID: msg.MessageID,
-				Error:     err,
+				MessageID: messageID,
+				Error:     fmt.Errorf("agent error: %s", update.Content),
+			}
+		case "done":
+			return ChatWithToolsCompleteMsg{
+				MessageID: messageID,
+				Response:  update.Content,
 			}
 		}
-
-		return ChatWithToolsCompleteMsg{
-			MessageID: msg.MessageID,
-			Response:  response,
-		}
+		return nil
 	}
 }
 
 // handleChatWithToolsComplete 处理 ChatWithTools 完成
 func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Model, tea.Cmd) {
+	// 清理 channel 引用
+	m.currentProgressCh = nil
+
 	// 查找并更新消息
 	for i := range m.messages {
 		if m.messages[i].ID == msg.MessageID {
@@ -367,10 +412,31 @@ func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Mo
 func (m Model) handleReActStep(msg ReActStepMsg) (tea.Model, tea.Cmd) {
 	for i := range m.messages {
 		if m.messages[i].ID == msg.MessageID {
-			m.messages[i].AddReActStep(msg.StepType, msg.Content)
+			// action 类型需要特殊处理，使用 AddToolCall 创建带 ToolCall 的步骤
+			if msg.StepType == "action" {
+				// 将 Content 解析为 input（实际上 Content 是格式化后的字符串，我们创建一个简单的 input）
+				input := map[string]any{"description": msg.Content}
+				m.messages[i].AddToolCall(msg.ToolName, input)
+			} else if msg.StepType == "observation" {
+				// observation 类型需要更新工具调用结果
+				status := message.StatusCompleted
+				// 检查是否是错误观察（包含 "failed" 字样）
+				if strings.Contains(msg.Content, "failed") || strings.Contains(msg.Content, "Error") {
+					status = message.StatusError
+				}
+				m.messages[i].UpdateToolCall(msg.ToolName, msg.Content, status, "")
+			} else {
+				m.messages[i].AddReActStep(msg.StepType, msg.Content)
+			}
 			break
 		}
 	}
+
+	// 继续监听进度（如果 channel 仍可用）
+	if m.currentProgressCh != nil {
+		return m, waitForAgentProgress(msg.MessageID, m.currentProgressCh)
+	}
+
 	return m, nil
 }
 

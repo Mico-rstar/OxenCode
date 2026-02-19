@@ -65,6 +65,9 @@ type Model struct {
 	streamCh     <-chan string
 	errCh        <-chan error
 
+	// Agent 异步操作 channel（用于当前正在进行的对话）
+	currentProgressCh <-chan agent.ProgressUpdate
+
 	// 滚动视口
 	viewport         viewport.Model
 	scrollOffset     int  // 消息滚动偏移量

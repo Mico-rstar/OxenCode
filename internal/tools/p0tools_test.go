@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/yourname/oxencode/pkg/logger"
 )
 
@@ -397,4 +399,140 @@ func TestReadTool(t *testing.T) {
 			t.Error("Expected error for offset exceeding file length")
 		}
 	})
+}
+
+// === Agent Tool Adapter Tests ===
+
+func TestAgentToolAdapter(t *testing.T) {
+	_, env := setupTestEnv(t)
+
+	t.Run("Glob tool adapter", func(t *testing.T) {
+		tool := NewGlobTool(env, nil)
+		adapter := NewAgentToolAdapter(tool)
+
+		// 检查 Info
+		info := adapter.Info()
+		if info.Name != "glob" {
+			t.Errorf("Expected name 'glob', got: %s", info.Name)
+		}
+		if info.Description == "" {
+			t.Error("Description should not be empty")
+		}
+		if info.Parameters == nil {
+			t.Error("Parameters should not be nil")
+		}
+
+		// 创建测试文件
+		env.WriteFile("test.txt", []byte("content"), 0644)
+
+		// 检查 Run
+		ctx := context.Background()
+		response, err := adapter.Run(ctx, fantasy.ToolCall{
+			ID:    "test-call-id",
+			Name:  "glob",
+			Input: `{"pattern": "*.txt"}`,
+		})
+
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		if response.IsError {
+			t.Errorf("Expected success, got error: %s", response.Content)
+		}
+
+		if response.Content == "" {
+			t.Error("Expected non-empty content")
+		}
+	})
+
+	t.Run("Grep tool adapter", func(t *testing.T) {
+		tool := NewGrepTool(env, nil)
+		adapter := NewAgentToolAdapter(tool)
+
+		// 创建测试文件
+		env.WriteFile("test.txt", []byte("hello world\nhello go\n"), 0644)
+
+		// 检查 Run
+		ctx := context.Background()
+		response, err := adapter.Run(ctx, fantasy.ToolCall{
+			ID:    "test-call-id",
+			Name:  "grep",
+			Input: `{"pattern": "hello", "path": "."}`,
+		})
+
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		if response.IsError {
+			t.Errorf("Expected success, got error: %s", response.Content)
+		}
+
+		if !strings.Contains(response.Content, "hello") {
+			t.Errorf("Expected 'hello' in content, got: %s", response.Content)
+		}
+	})
+
+	t.Run("Invalid input JSON", func(t *testing.T) {
+		tool := NewGlobTool(env, nil)
+		adapter := NewAgentToolAdapter(tool)
+
+		ctx := context.Background()
+		response, err := adapter.Run(ctx, fantasy.ToolCall{
+			ID:    "test-call-id",
+			Name:  "glob",
+			Input: `{invalid json}`,
+		})
+
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		if !response.IsError {
+			t.Error("Expected error response for invalid JSON")
+		}
+	})
+
+	t.Run("Missing required parameter", func(t *testing.T) {
+		tool := NewGlobTool(env, nil)
+		adapter := NewAgentToolAdapter(tool)
+
+		ctx := context.Background()
+		response, err := adapter.Run(ctx, fantasy.ToolCall{
+			ID:    "test-call-id",
+			Name:  "glob",
+			Input: `{}`, // 缺少必填的 pattern 参数
+		})
+
+		if err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		if !response.IsError {
+			t.Error("Expected error response for missing required parameter")
+		}
+	})
+}
+
+func TestToolsToAgentTools(t *testing.T) {
+	_, env := setupTestEnv(t)
+
+	tools := []Tool{
+		NewGlobTool(env, nil),
+		NewGrepTool(env, nil),
+		NewReadTool(env, nil),
+	}
+
+	agentTools := ToolsToAgentTools(tools)
+
+	if len(agentTools) != 3 {
+		t.Errorf("Expected 3 agent tools, got: %d", len(agentTools))
+	}
+
+	for i, at := range agentTools {
+		if at == nil {
+			t.Errorf("Agent tool %d is nil", i)
+		}
+	}
 }
