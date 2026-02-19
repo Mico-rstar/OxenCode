@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/fantasy"
@@ -576,125 +577,105 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 		userMsg := message.NewMessage(message.RoleUser, userMessage)
 		a.history = append(a.history, userMsg)
 
-		// 开始 ReAct 循环
-		maxIterations := 10 // 防止无限循环
-		for iteration := 0; iteration < maxIterations; iteration++ {
-			// 检查 context 取消
-			select {
-			case <-ctx.Done():
-				sendProgress("error", ctx.Err().Error(), "")
-				return
-			default:
-			}
+		// 构建消息列表
+		messages := a.buildMessagesWithTools()
 
-			a.logger.Debug("ReAct iteration", "iteration", iteration+1, "max", maxIterations)
+		// 获取工具名称列表
+		toolNames := a.toolRegistry.Names()
 
-			// 构建消息列表，包含历史和工具调用结果
-			messages := a.buildMessagesWithTools()
-
-			// 获取工具名称列表
-			toolNames := a.toolRegistry.Names()
-
-			// 调用 LLM
-			result, err := a.agent.Generate(ctx, fantasy.AgentCall{
-				Prompt:       userMessage,
-				Messages:     messages,
-				ActiveTools: toolNames,
-			})
-
-			if err != nil {
-				a.logger.Error("LLM generation failed", "error", err)
-				sendProgress("error", err.Error(), "")
-				return
-			}
-
-			// 提取响应内容
-			content := result.Response.Content
-			if len(content) == 0 {
-				a.logger.Warn("LLM returned empty content")
-				sendProgress("done", "", "")
-				return
-			}
-
-			// 检查是否有工具调用
-			hasToolCalls := false
-			var responseText strings.Builder
-
-			// 遍历响应内容
-			for _, c := range content {
-				switch content := c.(type) {
-				case fantasy.TextContent:
-					// 文本内容
-					responseText.WriteString(content.Text)
-					sendProgress("content", content.Text, "")
-
-				case fantasy.ToolCallContent:
-					// 工具调用
-					hasToolCalls = true
-					a.logger.Info("Tool call requested", "tool", content.ToolName, "callID", content.ToolCallID)
-
-					// 解析工具输入
-					var toolInput map[string]any
-					if err := json.Unmarshal([]byte(content.Input), &toolInput); err != nil {
-						a.logger.Warn("Failed to parse tool input", "error", err)
-						toolInput = map[string]any{}
-					}
-
-					// 发送 action 步骤
-					inputStr := fmt.Sprintf("%v", toolInput)
-					sendProgress("action", inputStr, content.ToolName)
-
-					// 执行工具
-					toolOutput, err := a.executeToolCall(ctx, content)
-					if err != nil {
-						a.logger.Error("Tool execution failed", "tool", content.ToolName, "error", err)
-
-						// 发送错误观察
-						errorMsg := fmt.Sprintf("Tool %s failed: %v", content.ToolName, err)
-						sendProgress("observation", errorMsg, content.ToolName)
-
-						// 将工具结果添加到历史（用于下一轮）
-						toolResultMsg := message.NewMessage(message.RoleTool, fmt.Sprintf("Error: %v", err))
-						a.history = append(a.history, toolResultMsg)
-					} else {
-						a.logger.Info("Tool executed successfully", "tool", content.ToolName, "outputLength", len(toolOutput))
-
-						// 发送观察步骤
-						// 限制观察内容长度
-						observation := toolOutput
-						if len(observation) > 500 {
-							observation = observation[:500] + "\n... (truncated)"
-						}
-						sendProgress("observation", observation, content.ToolName)
-
-						// 将工具结果添加到历史（用于下一轮）
-						toolResultMsg := message.NewMessage(message.RoleTool, toolOutput)
-						a.history = append(a.history, toolResultMsg)
-					}
+		// 调用 LLM，使用 Stream 方法和回调来捕获工具调用事件
+		result, err := a.agent.Stream(ctx, fantasy.AgentStreamCall{
+			Prompt:       userMessage,
+			Messages:     messages,
+			ActiveTools: toolNames,
+			// Tool execution callbacks
+			OnToolCall: func(toolCall fantasy.ToolCallContent) error {
+				// 解析工具输入
+				var toolInput map[string]any
+				if err := json.Unmarshal([]byte(toolCall.Input), &toolInput); err != nil {
+					a.logger.Warn("Failed to parse tool input", "error", err)
+					toolInput = map[string]any{}
 				}
-			}
 
-			// 如果没有工具调用，说明任务完成
-			if !hasToolCalls {
-				a.logger.Info("No tool calls, task completed")
-				finalResponse := responseText.String()
+				// 格式化工具调用参数为函数调用形式，如 glob("**/*.go")
+				inputStr := formatToolCall(toolCall.ToolName, toolInput)
+				a.logger.Info("Tool call", "tool", toolCall.ToolName, "callID", toolCall.ToolCallID)
+				sendProgress("action", inputStr, toolCall.ToolName)
+				return nil
+			},
+			OnToolResult: func(result fantasy.ToolResultContent) error {
+				// 提取工具执行结果
+				var observation string
+				var isError bool
 
-				// 添加助手响应到历史
-				assistantMsg := message.NewMessage(message.RoleAssistant, finalResponse)
-				a.history = append(a.history, assistantMsg)
+				switch content := result.Result.(type) {
+				case *fantasy.ToolResultOutputContentText:
+					observation = content.Text
+				case fantasy.ToolResultOutputContentText:
+					observation = content.Text
+				case *fantasy.ToolResultOutputContentError:
+					observation = content.Error.Error()
+					isError = true
+				case fantasy.ToolResultOutputContentError:
+					observation = content.Error.Error()
+					isError = true
+				case *fantasy.ToolResultOutputContentMedia:
+					observation = content.Text
+					if content.Data != "" {
+						if observation != "" {
+							observation += "\n"
+						}
+						observation += fmt.Sprintf("[Media: %s, %d bytes]", content.MediaType, len(content.Data))
+					}
+				case fantasy.ToolResultOutputContentMedia:
+					observation = content.Text
+					if content.Data != "" {
+						if observation != "" {
+							observation += "\n"
+						}
+						observation += fmt.Sprintf("[Media: %s, %d bytes]", content.MediaType, len(content.Data))
+					}
+				default:
+					observation = fmt.Sprintf("%v", result.Result)
+				}
 
-				// 发送完成信号
-				sendProgress("done", finalResponse, "")
-				return
-			}
+				// 截断过长的观察结果
+				if len(observation) > 500 {
+					observation = observation[:500] + "\n... (truncated)"
+				}
 
-			// 有工具调用，继续下一轮循环
-			a.logger.Debug("Continuing ReAct loop", "iteration", iteration+1)
+				a.logger.Info("Tool result", "toolName", result.ToolName, "isError", isError, "observationLength", len(observation))
+				sendProgress("observation", observation, result.ToolName)
+				return nil
+			},
+			OnFinish: func(result *fantasy.AgentResult) {
+				a.logger.Info("Agent finished", "steps", len(result.Steps))
+			},
+		})
+
+		if err != nil {
+			a.logger.Error("LLM generation failed", "error", err)
+			sendProgress("error", err.Error(), "")
+			return
 		}
 
-		// 达到最大迭代次数
-		a.logger.Warn("ReAct loop reached max iterations")
-		sendProgress("error", fmt.Sprintf("ReAct loop reached maximum iterations (%d)", maxIterations), "")
+		// 提取最终响应内容
+		var finalText strings.Builder
+		for _, c := range result.Response.Content {
+			switch content := c.(type) {
+			case fantasy.TextContent:
+				finalText.WriteString(content.Text)
+			}
+		}
+
+		finalResponse := finalText.String()
+
+		// 添加助手响应到历史
+		assistantMsg := message.NewMessage(message.RoleAssistant, finalResponse)
+		a.history = append(a.history, assistantMsg)
+
+		// 发送完成信号
+		sendProgress("done", finalResponse, "")
 	}()
 
 	return ch
@@ -812,5 +793,116 @@ func (a *Agent) buildMessagesWithTools() []fantasy.Message {
 	}
 
 	return messages
+}
+
+// formatToolCall 将工具调用格式化为函数调用形式，如 glob("**/*.go") 或 grep("pattern", "path")
+func formatToolCall(toolName string, input map[string]any) string {
+	if len(input) == 0 {
+		return toolName + "()"
+	}
+
+	// 定义参数顺序（让常用参数显示在前面）
+	paramOrder := map[string]int{
+		"pattern":   0,
+		"path":      1,
+		"filePath":  1,
+		"query":     0,
+		"search":    0,
+		"directory": 1,
+	}
+
+	// 按顺序排列参数
+	type orderedParam struct {
+		key   string
+		value any
+	}
+	var params []orderedParam
+
+	// 首先添加有定义顺序的参数
+	for key, value := range input {
+		if _, ok := paramOrder[key]; ok {
+			params = append(params, orderedParam{key, value})
+		}
+	}
+	// 按定义顺序排序
+	sort.Slice(params, func(i, j int) bool {
+		orderI, okI := paramOrder[params[i].key]
+		orderJ, okJ := paramOrder[params[j].key]
+		if !okI {
+			orderI = 999
+		}
+		if !okJ {
+			orderJ = 999
+		}
+		if orderI != orderJ {
+			return orderI < orderJ
+		}
+		return params[i].key < params[j].key
+	})
+
+	// 然后添加其他参数
+	for key, value := range input {
+		if _, ok := paramOrder[key]; !ok {
+			params = append(params, orderedParam{key, value})
+		}
+	}
+
+	// 格式化参数
+	var args []string
+	for _, p := range params {
+		argStr := formatValue(p.value)
+		// 如果参数名不是常见的位置参数，显示参数名
+		if _, ok := paramOrder[p.key]; !ok && len(params) > 1 {
+			args = append(args, p.key+"="+argStr)
+		} else {
+			args = append(args, argStr)
+		}
+	}
+
+	// 对于单个参数且是 pattern/query 等常见参数，简化显示
+	if len(args) == 1 {
+		if firstParam, ok := input["pattern"]; ok {
+			return fmt.Sprintf("%s(%s)", toolName, formatValue(firstParam))
+		}
+		if firstParam, ok := input["query"]; ok {
+			return fmt.Sprintf("%s(%s)", toolName, formatValue(firstParam))
+		}
+		if firstParam, ok := input["search"]; ok {
+			return fmt.Sprintf("%s(%s)", toolName, formatValue(firstParam))
+		}
+	}
+
+	return fmt.Sprintf("%s(%s)", toolName, strings.Join(args, ", "))
+}
+
+// formatValue 格式化参数值
+func formatValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		// 字符串加引号，但如果太长则截断
+		if len(val) > 50 {
+			return fmt.Sprintf("\"%s...\"", val[:50])
+		}
+		return fmt.Sprintf("\"%s\"", val)
+	case []any:
+		// 数组格式化
+		var parts []string
+		for _, item := range val {
+			parts = append(parts, formatValue(item))
+		}
+		return fmt.Sprintf("[%s]", strings.Join(parts, ", "))
+	case map[string]any:
+		// 对象简化显示
+		if len(val) == 0 {
+			return "{}"
+		}
+		var parts []string
+		for k, kv := range val {
+			parts = append(parts, fmt.Sprintf("%s: %s", k, formatValue(kv)))
+		}
+		return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 

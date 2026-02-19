@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/yourname/oxencode/internal/message"
+	"github.com/yourname/oxencode/pkg/logger"
 )
 
 // renderHeader 渲染状态栏
@@ -80,6 +81,12 @@ func (m Model) renderMessage(msg message.Message) string {
 		b.WriteString(msg.Content)
 
 	case message.RoleAssistant:
+		log := logger.New("ui.render")
+		log.Info("Rendering Assistant message",
+			"messageID", msg.ID,
+			"reactLoopLength", len(msg.ReActLoop),
+			"contentLength", len(msg.Content))
+
 		header := lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			m.styles.IconAssistant.Render(icon),
@@ -90,8 +97,19 @@ func (m Model) renderMessage(msg message.Message) string {
 
 		// 渲染 ReAct 循环
 		if len(msg.ReActLoop) > 0 {
+			log.Info("Rendering ReAct steps", "count", len(msg.ReActLoop))
 			b.WriteString("\n")
 			for i, step := range msg.ReActLoop {
+				status := ""
+				if step.ToolCall != nil {
+					status = string(step.ToolCall.Status)
+				}
+				log.Info("Rendering step",
+					"index", i,
+					"type", step.Type,
+					"contentLength", len(step.Content),
+					"hasToolCall", step.ToolCall != nil,
+					"toolCallStatus", status)
 				b.WriteString(m.renderReActStep(step, i == len(msg.ReActLoop)-1))
 			}
 		}
@@ -128,14 +146,22 @@ func (m Model) renderReActStep(step message.ReActStep, isLast bool) string {
 	case "action":
 		if step.ToolCall != nil {
 			statusIcon := GetStatusIcon(step.ToolCall.Status)
+			// 尝试从 Input 中获取 display 字段（格式化的工具调用字符串）
+			display := step.ToolCall.Name
+			if displayVal, ok := step.ToolCall.Input["display"].(string); ok {
+				display = displayVal
+			} else if step.Content != "" {
+				// 如果没有 display 字段，使用 Content
+				display = step.Content
+			}
 			content = lipgloss.JoinHorizontal(
 				lipgloss.Top,
 				m.styles.IconTool.Render(IconTool),
-				" "+step.ToolCall.Name,
+				" "+display,
 				" "+m.styles.Muted.Render(statusIcon),
 			)
 			if step.ToolCall.Output != "" {
-				content += "\n" + m.styles.Muted.Render("  ├─ Result: "+step.ToolCall.Output)
+				content += "\n" + m.styles.Muted.Render("  └─ Result: "+truncateString(step.ToolCall.Output, 200))
 			}
 		} else {
 			content = step.Content
@@ -145,13 +171,22 @@ func (m Model) renderReActStep(step message.ReActStep, isLast bool) string {
 		content = lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			m.styles.IconSuccess.Render(IconSuccess),
-			" "+step.Content,
+			" "+truncateString(step.Content, 200),
 		)
 	default:
 		content = step.Content
 	}
 
-	return m.styles.ReActBranch.Render(prefix + " " + content)
+	// 添加换行符，使每个步骤独占一行
+	return m.styles.ReActBranch.Render(prefix + " " + content) + "\n"
+}
+
+// truncateString 截断字符串到指定长度
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // renderFooter 渲染输入区域
