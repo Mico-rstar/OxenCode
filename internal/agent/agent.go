@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 	anthropic "charm.land/fantasy/providers/anthropic"
@@ -89,8 +90,9 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	registry.Register(grepTool)
 	registry.Register(readTool)
 
-	// 注册 P1 工具
-	bashTool := tools.NewBashTool(env, log)
+	// 注册 P1 工具（使用配置的超时时间）
+	toolTimeout := time.Duration(cfg.ToolTimeout) * time.Second
+	bashTool := tools.NewBashToolWithTimeout(env, log, toolTimeout)
 	writeTool := tools.NewWriteTool(env, log)
 	editTool := tools.NewEditTool(env, log)
 

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/yourname/oxencode/pkg/logger"
@@ -22,6 +20,11 @@ type BashTool struct {
 
 // NewBashTool 创建 Bash 工具
 func NewBashTool(env Environment, log logger.Logger) *BashTool {
+	return NewBashToolWithTimeout(env, log, 120*time.Second)
+}
+
+// NewBashToolWithTimeout 创建带自定义超时的 Bash 工具
+func NewBashToolWithTimeout(env Environment, log logger.Logger, timeout time.Duration) *BashTool {
 	if log == nil {
 		log = logger.New("tool.bash")
 	} else {
@@ -31,18 +34,13 @@ func NewBashTool(env Environment, log logger.Logger) *BashTool {
 	return &BashTool{
 		BaseTool: BaseTool{
 			name:        "bash",
-			description: "执行 shell 命令（支持异步执行和输出捕获）",
+			description: "执行 shell 命令（通过 /bin/sh -c 执行，支持管道、重定向、命令链等 shell 特性）",
 			parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"command": {
 						"type": "string",
-						"description": "要执行的命令"
-					},
-					"args": {
-						"type": "array",
-						"items": {"type": "string"},
-						"description": "命令参数列表"
+						"description": "要执行的完整 shell 命令字符串"
 					},
 					"dir": {
 						"type": "string",
@@ -50,11 +48,7 @@ func NewBashTool(env Environment, log logger.Logger) *BashTool {
 					},
 					"timeout": {
 						"type": "integer",
-						"description": "超时时间（秒），默认 120 秒"
-					},
-					"background": {
-						"type": "boolean",
-						"description": "是否在后台执行，默认为 false"
+						"description": "超时时间（秒），默认使用配置文件中的 tool_timeout 值"
 					}
 				},
 				"required": ["command"]
@@ -62,7 +56,7 @@ func NewBashTool(env Environment, log logger.Logger) *BashTool {
 			logger: log,
 		},
 		env:           env,
-		defaultTimeout: 120 * time.Second,
+		defaultTimeout: timeout,
 	}
 }
 
@@ -71,18 +65,6 @@ func (t *BashTool) Execute(ctx context.Context, input map[string]any) (string, e
 	command, ok := input["command"].(string)
 	if !ok {
 		return "", fmt.Errorf("command must be a string")
-	}
-
-	// 获取参数 - 支持 []string 和 []any 两种类型
-	var args []string
-	if a, ok := input["args"].([]any); ok {
-		args = make([]string, len(a))
-		for i, arg := range a {
-			args[i] = fmt.Sprintf("%v", arg)
-		}
-	} else if a, ok := input["args"].([]string); ok {
-		// 直接使用 []string 类型
-		args = a
 	}
 
 	// 获取工作目录
@@ -97,43 +79,25 @@ func (t *BashTool) Execute(ctx context.Context, input map[string]any) (string, e
 		timeout = time.Duration(to) * time.Second
 	}
 
-	// 检查是否后台执行
-	background := false
-	if bg, ok := input["background"].(bool); ok {
-		background = bg
-	}
-
 	t.logger.Debug("Executing bash command",
 		"command", command,
-		"args", args,
 		"dir", workDir,
-		"timeout", timeout,
-		"background", background)
+		"timeout", timeout)
 
 	// 创建带超时的上下文
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 构建命令
-	cmd := exec.CommandContext(cmdCtx, command, args...)
+	// 使用 /bin/sh -c 执行命令，支持所有 shell 特性
+	// shell := "/bin/bash"
+	shell := "/bin/sh"
+	shellFlag := "-c"
+
+	cmd := exec.CommandContext(cmdCtx, shell, shellFlag, command)
 	cmd.Dir = workDir
 
 	// 设置环境变量
 	cmd.Env = os.Environ()
-
-	if background {
-		// 后台执行模式
-		if err := cmd.Start(); err != nil {
-			t.logger.Error("Failed to start background command", "error", err)
-			return "", fmt.Errorf("failed to start background command: %w", err)
-		}
-
-		pid := cmd.Process.Pid
-		t.logger.Info("Background command started", "pid", pid, "command", command)
-
-		// 不等待命令完成
-		return fmt.Sprintf("Background command started with PID: %d", pid), nil
-	}
 
 	// 前台执行模式，捕获输出
 	output, err := cmd.CombinedOutput()
@@ -168,52 +132,4 @@ func (t *BashTool) Execute(ctx context.Context, input map[string]any) (string, e
 	}
 
 	return string(output), nil
-}
-
-// ExecuteWithShell 在 shell 中执行命令字符串
-// 这允许使用管道、重定向等 shell 特性
-func (t *BashTool) ExecuteWithShell(ctx context.Context, commandStr string, dir string, timeout time.Duration) (string, error) {
-	t.logger.Debug("Executing shell command string",
-		"command", commandStr,
-		"dir", dir,
-		"timeout", timeout)
-
-	// 根据操作系统选择 shell
-	shell := "/bin/bash"
-	shellFlag := "-c"
-	if os.Getenv("OS") == "Windows_NT" || filepath.IsAbs("C:\\") {
-		// Windows 环境
-		shell = "cmd"
-		shellFlag = "/C"
-	}
-
-	// 创建带超时的上下文
-	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, shell, shellFlag, commandStr)
-	cmd.Dir = dir
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.logger.Error("Shell command failed", "error", err)
-		return "", fmt.Errorf("shell command failed: %w", err)
-	}
-
-	return string(output), nil
-}
-
-// ParseCommandString 解析命令字符串为命令和参数
-// 支持简单的引号处理
-func ParseCommandString(cmdStr string) (command string, args []string, err error) {
-	// 简单实现：按空格分割，支持引号
-	parts := strings.Fields(cmdStr)
-	if len(parts) == 0 {
-		return "", nil, fmt.Errorf("empty command string")
-	}
-
-	command = parts[0]
-	args = parts[1:]
-
-	return command, args, nil
 }

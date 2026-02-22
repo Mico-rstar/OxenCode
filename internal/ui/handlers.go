@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/yourname/oxencode/internal/agent"
 	"github.com/yourname/oxencode/internal/message"
-	"github.com/yourname/oxencode/pkg/logger"
 )
 
 // buildContent 构建消息内容字符串
@@ -336,20 +335,12 @@ func (m Model) handleChatWithToolsStart(msg ChatWithToolsStartMsg) (tea.Model, t
 
 // waitForAgentProgress 等待进度更新（单一 channel 模式）
 func waitForAgentProgress(messageID string, progressCh <-chan agent.ProgressUpdate) tea.Cmd {
-	log := logger.New("ui.progress")
 	return func() tea.Msg {
 		update, ok := <-progressCh
 		if !ok {
 			// Channel 关闭，正常结束
-			log.Info("channel closed", "messageID", messageID)
 			return nil
 		}
-
-		log.Info("progress update received",
-			"messageID", messageID,
-			"type", update.Type,
-			"contentLength", len(update.Content),
-			"toolName", update.ToolName)
 
 		switch update.Type {
 		case "thought":
@@ -386,7 +377,6 @@ func waitForAgentProgress(messageID string, progressCh <-chan agent.ProgressUpda
 				Error:     fmt.Errorf("agent error: %s", update.Content),
 			}
 		case "done":
-			log.Info("done received", "messageID", messageID, "responseLength", len(update.Content))
 			return ChatWithToolsCompleteMsg{
 				MessageID: messageID,
 				Response:  update.Content,
@@ -398,15 +388,12 @@ func waitForAgentProgress(messageID string, progressCh <-chan agent.ProgressUpda
 
 // handleChatWithToolsComplete 处理 ChatWithTools 完成
 func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Model, tea.Cmd) {
-	log := logger.New("ui.complete")
-	log.Info("ChatWithToolsComplete", "messageID", msg.MessageID, "responseLength", len(msg.Response))
 	// 清理 channel 引用
 	m.currentProgressCh = nil
 
 	// 查找并更新消息
 	for i := range m.messages {
 		if m.messages[i].ID == msg.MessageID {
-			log.Info("Found message to complete", "reactLoopLength", len(m.messages[i].ReActLoop))
 			if msg.Error != nil {
 				m.messages[i].SetError(msg.Error)
 				m.appState = StateError
@@ -415,7 +402,6 @@ func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Mo
 				m.messages[i].Complete()
 				m.appState = StateIdle
 			}
-			log.Info("Message completed", "reactLoopLength", len(m.messages[i].ReActLoop), "contentLength", len(m.messages[i].Content))
 			break
 		}
 	}
@@ -424,24 +410,14 @@ func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Mo
 
 // handleReActStep 处理 ReAct 步骤
 func (m Model) handleReActStep(msg ReActStepMsg) (tea.Model, tea.Cmd) {
-	log := logger.New("ui.reactStep")
-	log.Info("handleReActStep called",
-		"messageID", msg.MessageID,
-		"stepType", msg.StepType,
-		"contentLength", len(msg.Content),
-		"toolName", msg.ToolName,
-		"messagesCount", len(m.messages))
-
 	for i := range m.messages {
 		if m.messages[i].ID == msg.MessageID {
-			log.Info("Found matching message", "index", i, "currentReActLoopLength", len(m.messages[i].ReActLoop))
 			switch msg.StepType {
 			case "action":
 				// msg.Content 已经是格式化的工具调用字符串，如 glob("**/*.go")
 				// 创建工具调用，将格式化字符串保存为 display 字段
 				input := map[string]any{"display": msg.Content}
 				m.messages[i].AddToolCall(msg.ToolName, input)
-				log.Info("Added tool call", "toolName", msg.ToolName, "display", msg.Content, "newReActLoopLength", len(m.messages[i].ReActLoop))
 			case "observation":
 				// observation 类型需要更新工具调用结果
 				status := message.StatusCompleted
@@ -449,13 +425,10 @@ func (m Model) handleReActStep(msg ReActStepMsg) (tea.Model, tea.Cmd) {
 				isError := strings.Contains(msg.Content, "failed") || strings.Contains(msg.Content, "Error") || strings.Contains(msg.Content, "is a directory")
 				if isError {
 					status = message.StatusError
-					log.Info("Detected error in observation", "content", msg.Content, "toolName", msg.ToolName)
 				}
 				m.messages[i].UpdateToolCall(msg.ToolName, msg.Content, status, "")
-				log.Info("Updated tool call", "toolName", msg.ToolName, "status", status, "reactLoopLength", len(m.messages[i].ReActLoop))
 			default:
 				m.messages[i].AddReActStep(msg.StepType, msg.Content)
-				log.Info("Added ReAct step", "stepType", msg.StepType, "newReActLoopLength", len(m.messages[i].ReActLoop))
 			}
 			break
 		}

@@ -51,6 +51,9 @@ type Config struct {
 	// 工作目录配置
 	WorkDir string `mapstructure:"work_dir"` // 工作目录，默认为当前目录
 
+	// 工具配置
+	ToolTimeout int `mapstructure:"tool_timeout"` // 工具执行超时时间（秒），默认 120
+
 	// 系统提示词配置
 	PromptDir string `mapstructure:"prompt_dir"` // 系统提示词目录，默认为 internal/prompt
 }
@@ -96,6 +99,7 @@ func Load() (*Config, error) {
 	v.SetDefault("max_tokens", 8192)
 	v.SetDefault("temperature", 0.7)
 	v.SetDefault("work_dir", ".")
+	v.SetDefault("tool_timeout", 120)
 	v.SetDefault("prompt_dir", "internal/prompt")
 
 	// 尝试读取用户配置文件

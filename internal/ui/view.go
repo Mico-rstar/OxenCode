@@ -5,7 +5,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/yourname/oxencode/internal/message"
-	"github.com/yourname/oxencode/pkg/logger"
 )
 
 // renderHeader 渲染状态栏
@@ -81,12 +80,6 @@ func (m Model) renderMessage(msg message.Message) string {
 		b.WriteString(msg.Content)
 
 	case message.RoleAssistant:
-		log := logger.New("ui.render")
-		log.Info("Rendering Assistant message",
-			"messageID", msg.ID,
-			"reactLoopLength", len(msg.ReActLoop),
-			"contentLength", len(msg.Content))
-
 		header := lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			m.styles.IconAssistant.Render(icon),
@@ -97,19 +90,8 @@ func (m Model) renderMessage(msg message.Message) string {
 
 		// 渲染 ReAct 循环
 		if len(msg.ReActLoop) > 0 {
-			log.Info("Rendering ReAct steps", "count", len(msg.ReActLoop))
 			b.WriteString("\n")
 			for i, step := range msg.ReActLoop {
-				status := ""
-				if step.ToolCall != nil {
-					status = string(step.ToolCall.Status)
-				}
-				log.Info("Rendering step",
-					"index", i,
-					"type", step.Type,
-					"contentLength", len(step.Content),
-					"hasToolCall", step.ToolCall != nil,
-					"toolCallStatus", status)
 				b.WriteString(m.renderReActStep(step, i == len(msg.ReActLoop)-1))
 			}
 		}
