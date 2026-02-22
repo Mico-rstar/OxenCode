@@ -2,6 +2,8 @@ package message
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Role 消息角色类型
@@ -27,6 +29,7 @@ const (
 
 // ToolCall 工具调用信息
 type ToolCall struct {
+	ID      string            `json:"id"`                // 工具调用唯一ID
 	Name    string            `json:"name"`              // 工具名称
 	Input   map[string]any    `json:"input"`             // 工具输入参数
 	Output  string            `json:"output,omitempty"`  // 工具输出结果
@@ -95,7 +98,11 @@ func (m *Message) AddReActStep(stepType, content string) {
 
 // AddToolCall 添加工具调用步骤
 func (m *Message) AddToolCall(toolName string, input map[string]any) string {
+	// 生成唯一的工具调用ID (UUID)
+	toolCallID := uuid.New().String()
+
 	toolCall := &ToolCall{
+		ID:     toolCallID,
 		Name:   toolName,
 		Input:  input,
 		Status: StatusPending,
@@ -109,13 +116,17 @@ func (m *Message) AddToolCall(toolName string, input map[string]any) string {
 	}
 
 	m.ReActLoop = append(m.ReActLoop, step)
-	return toolCall.Name // 返回工具调用ID
+	return toolCallID // 返回工具调用ID
 }
 
 // UpdateToolCall 更新工具调用结果
+// 查找最后一个匹配工具名称且处于 pending 状态的工具调用进行更新
 func (m *Message) UpdateToolCall(toolName string, output string, status Status, errMsg string) {
-	for i := range m.ReActLoop {
-		if m.ReActLoop[i].ToolCall != nil && m.ReActLoop[i].ToolCall.Name == toolName {
+	// 从后往前查找，找到最后一个匹配且pending的工具调用
+	for i := len(m.ReActLoop) - 1; i >= 0; i-- {
+		if m.ReActLoop[i].ToolCall != nil &&
+			m.ReActLoop[i].ToolCall.Name == toolName &&
+			m.ReActLoop[i].ToolCall.Status == StatusPending {
 			m.ReActLoop[i].ToolCall.Output = output
 			m.ReActLoop[i].ToolCall.Status = status
 			m.ReActLoop[i].ToolCall.Error = errMsg
@@ -150,18 +161,7 @@ func (m *Message) SetError(err error) {
 	}
 }
 
-// GenerateID 生成唯一ID
+// GenerateID 生成唯一ID (使用UUID)
 func GenerateID() string {
-	return time.Now().Format("20060102150405") + "-" + randomString(6)
-}
-
-// randomString 生成随机字符串
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
-		time.Sleep(time.Nanosecond) // 确保随机性
-	}
-	return string(b)
+	return uuid.New().String()
 }
