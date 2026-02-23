@@ -4,7 +4,7 @@
 # ====== Provider 配置 ======
 # 可选值: anthropic, openai, azure, bedrock, google, openrouter, vercel, openaicompat
 #          qwen, deepseek, glm
-provider = "qwen"
+provider = "deepseek"
 
 # ====== API Key ======
 # 大多数情况下可以通过环境变量设置，这里留空即可
@@ -15,7 +15,8 @@ provider = "qwen"
 # Qwen: DASHSCOPE_API_KEY
 # DeepSeek: DEEPSEEK_API_KEY
 # GLM: ZHIPU_API_KEY
-api_key = "sk-8440a58764c846c88183bfec2d94d279"
+# api_key = "sk-8440a58764c846c88183bfec2d94d279"
+api_key = "sk-2021bc4319604c458a338eb9575246a1"
 
 # ====== 模型配置 ======
 # Anthropic Claude 模型
@@ -23,7 +24,7 @@ api_key = "sk-8440a58764c846c88183bfec2d94d279"
 # claude-sonnet-4-20250514
 # claude-3-5-sonnet-20241022
 # claude-3-5-haiku-20241022
-model = "qwen3-max"
+# model = "qwen3-max"
 
 # OpenAI 模型示例
 # model = "gpt-4o"
@@ -41,7 +42,7 @@ model = "qwen3-max"
 # DeepSeek 模型示例
 # model = "deepseek-chat"
 # model = "deepseek-coder"
-# model = "deepseek-reasoner"
+model = "deepseek-reasoner"
 
 # GLM (智谱清言) 模型示例
 # model = "glm-4-plus"
@@ -74,6 +75,35 @@ work_dir = "./test"
 # 指定工具执行的超时时间（秒）
 # 默认值: 120 秒
 tool_timeout = 10
+
+# ====== Extended Thinking (可选) ======
+# 启用模型的推理功能（Chain of Thought）
+# 不同 provider 使用不同的配置方式：
+#
+# 1. Anthropic Claude:
+#    - 设置 thinking_enabled = true
+#    - 设置 thinking_budget 为推理 token 预算（如 20000）
+#    - 适用模型: claude-sonnet-4-5-20250514 等
+#
+# 2. OpenAI (o1 系列):
+#    - 设置 thinking_enabled = true
+#    - 设置 thinking_effort 为推理级别: "minimal", "low", "medium", "high"
+#    - 适用模型: o1-preview, o1-mini
+#
+# 3. OpenRouter (推荐用于 Qwen, DeepSeek 等):
+#    - 设置 thinking_enabled = true
+#    - 可选设置 thinking_effort 为推理级别: "low", "medium", "high"
+#    - OpenRouter 会自动传递 enable_thinking 参数给 Qwen 等模型
+#
+# 4. Qwen (通义千问):
+#    - 注意: 直接使用 openaicompat provider 时，由于库限制无法完整支持
+#    - 建议: 使用 OpenRouter provider 访问 Qwen 模型，可获得完整 thinking 支持
+#    - 适用模型: qwen-max, qwen-plus, qwen-turbo 等
+#
+# 默认值: 全部不启用
+# thinking_enabled = false
+# thinking_budget = 20000       # Anthropic: token 预算
+# thinking_effort = "medium"    # OpenAI/OpenRouter: 推理级别
 
 # ====== Base URL (可选) ======
 # 用于 openaicompat 或自定义 OpenAI 兼容 API

@@ -105,13 +105,23 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	// 将工具转换为 fantasy.AgentTool
 	fantasyTools := tools.ToolsToAgentTools(registry.List())
 
-	// 创建 Agent 并注册工具
-	agent := fantasy.NewAgent(
-		model,
+	// 构建 ProviderOptions
+	providerOpts := buildProviderOptions(cfg, log)
+
+	// 创建 Agent 选项
+	agentOpts := []fantasy.AgentOption{
 		fantasy.WithMaxOutputTokens(int64(cfg.MaxTokens)),
 		fantasy.WithTemperature(cfg.Temperature),
 		fantasy.WithTools(fantasyTools...),
-	)
+	}
+
+	// 如果有 ProviderOptions，添加到选项中
+	if providerOpts != nil {
+		agentOpts = append(agentOpts, fantasy.WithProviderOptions(providerOpts))
+	}
+
+	// 创建 Agent 并注册工具
+	agent := fantasy.NewAgent(model, agentOpts...)
 
 	// 加载系统提示词
 	systemPrompt := loadSystemPrompt(cfg, log)
@@ -126,6 +136,89 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		env:          env,
 		logger:       log,
 	}, nil
+}
+
+// buildProviderOptions 根据 provider 配置构建 ProviderOptions
+func buildProviderOptions(cfg *config.Config, log logger.Logger) fantasy.ProviderOptions {
+	// 检查是否启用了 thinking 功能
+	if !cfg.ThinkingEnabled {
+		return nil
+	}
+
+	switch cfg.Provider {
+	case config.ProviderAnthropic:
+		// Anthropic: 使用 thinking_budget (token 预算)
+		if cfg.ThinkingBudget > 0 {
+			trueVal := true
+			budgetTokens := int64(cfg.ThinkingBudget)
+			anthropicOpts := &anthropic.ProviderOptions{
+				SendReasoning: &trueVal,
+				Thinking: &anthropic.ThinkingProviderOption{
+					BudgetTokens: budgetTokens,
+				},
+			}
+			log.Info("Extended thinking enabled", "provider", "anthropic", "budget_tokens", cfg.ThinkingBudget)
+			return anthropic.NewProviderOptions(anthropicOpts)
+		}
+
+	case config.ProviderOpenAI, config.ProviderOpenAICompat, config.ProviderVercel:
+		// OpenAI 兼容: 使用 reasoning_effort
+		if cfg.ThinkingEffort != "" {
+			validEfforts := map[string]openai.ReasoningEffort{
+				"minimal": openai.ReasoningEffortMinimal,
+				"low":     openai.ReasoningEffortLow,
+				"medium":  openai.ReasoningEffortMedium,
+				"high":    openai.ReasoningEffortHigh,
+			}
+			if effort, ok := validEfforts[strings.ToLower(cfg.ThinkingEffort)]; ok {
+				openaicompatOpts := &openaicompat.ProviderOptions{
+					ReasoningEffort: &effort,
+				}
+				log.Info("Reasoning effort enabled", "provider", cfg.Provider, "effort", cfg.ThinkingEffort)
+				return openaicompat.NewProviderOptions(openaicompatOpts)
+			}
+			log.Warn("Invalid reasoning_effort value", "value", cfg.ThinkingEffort, "valid", "minimal, low, medium, high")
+		}
+
+	case config.ProviderOpenRouter:
+		// OpenRouter: 可以使用 reasoning_effort 或 extra_body
+		if cfg.ThinkingEffort != "" {
+			trueVal := true
+			openrouterOpts := &openrouter.ProviderOptions{
+				Reasoning: &openrouter.ReasoningOptions{
+					Enabled: &trueVal,
+					Effort:  (*openrouter.ReasoningEffort)(&cfg.ThinkingEffort),
+				},
+				// 为 Qwen 等模型添加 enable_thinking 参数
+				ExtraBody: map[string]any{
+					"enable_thinking": true,
+				},
+			}
+			log.Info("Reasoning effort enabled", "provider", "openrouter", "effort", cfg.ThinkingEffort)
+			return openrouter.NewProviderOptions(openrouterOpts)
+		}
+		// 如果只是启用 thinking 但没有指定 effort，为 Qwen 等添加 enable_thinking
+		if cfg.ThinkingEnabled && cfg.ThinkingEffort == "" {
+			openrouterOpts := &openrouter.ProviderOptions{
+				ExtraBody: map[string]any{
+					"enable_thinking": true,
+				},
+			}
+			log.Info("Thinking enabled via extra_body", "provider", "openrouter")
+			return openrouter.NewProviderOptions(openrouterOpts)
+		}
+
+	case config.ProviderQwen:
+		// Qwen: 注意 - 由于 fantasy 库限制，无法通过 openaicompat.ProviderOptions 传递 enable_thinking
+		// 建议：
+		// 1. 使用 OpenRouter provider 访问 Qwen 模型，可以正确传递 enable_thinking
+		// 2. 或等待 fantasy 库更新支持 extra_body
+		if cfg.ThinkingEnabled {
+			log.Warn("Qwen thinking via openaicompat is not fully supported", "suggestion", "use OpenRouter provider instead")
+		}
+	}
+
+	return nil
 }
 
 // loadSystemPrompt 加载系统提示词
@@ -582,7 +675,7 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 		}
 
 		// 发送初始 thought
-		sendProgress("thought", "User is asking: "+userMessage, "")
+		// sendProgress("thought", "User is asking: "+userMessage, "")
 
 		// 添加用户消息到历史
 		userMsg := message.NewMessage(message.RoleUser, userMessage)
@@ -598,7 +691,13 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 		result, err := a.agent.Stream(ctx, fantasy.AgentStreamCall{
 			Prompt:       userMessage,
 			Messages:     messages,
-			ActiveTools: toolNames,
+			ActiveTools:  toolNames,
+			// Reasoning callbacks - capture LLM thinking content
+			OnReasoningDelta: func(id, text string) error {
+				a.logger.Debug("Reasoning delta", "length", len(text))
+				sendProgress("thought", text, "")
+				return nil
+			},
 			// Tool execution callbacks
 			OnToolCall: func(toolCall fantasy.ToolCallContent) error {
 				// 解析工具输入

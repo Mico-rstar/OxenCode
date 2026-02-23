@@ -96,6 +96,19 @@ func (m *Message) AddReActStep(stepType, content string) {
 	m.ReActLoop = append(m.ReActLoop, step)
 }
 
+// AppendReActStep 累积ReAct步骤内容（用于流式reasoning内容）
+// 如果最后一个步骤类型相同，则追加内容；否则添加新步骤
+func (m *Message) AppendReActStep(stepType, content string) {
+	// 检查最后一个步骤是否是相同类型
+	if len(m.ReActLoop) > 0 && m.ReActLoop[len(m.ReActLoop)-1].Type == stepType {
+		// 累积内容到最后一个步骤
+		m.ReActLoop[len(m.ReActLoop)-1].Content += content
+	} else {
+		// 添加新步骤
+		m.AddReActStep(stepType, content)
+	}
+}
+
 // AddToolCall 添加工具调用步骤
 func (m *Message) AddToolCall(toolName string, input map[string]any) string {
 	// 生成唯一的工具调用ID (UUID)

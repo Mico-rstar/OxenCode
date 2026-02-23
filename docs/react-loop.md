@@ -33,6 +33,7 @@ ReAct 循环是一种让 AI Agent 通过"思考-行动-观察"的迭代过程来
 - **迭代推理**: 支持多轮工具调用，逐步解决复杂任务
 - **错误恢复**: 工具调用失败时可以重试或调整策略
 - **安全限制**: 最大迭代次数限制，防止无限循环
+- **LLM Reasoning 显示**: 对于支持的模型（如 Claude with extended thinking），在工具调用前展示模型思考过程
 
 ---
 
@@ -81,19 +82,173 @@ ReAct 循环由三个步骤组成：
 
 ```
 Iteration 1:
+  Thought (LLM Reasoning): "I need to search for Go files first, then look for 'error' in them."
   Thought: "我需要先找出所有 Go 文件"
   Action: Glob(pattern="*.go")
   Observation: "找到 15 个 .go 文件"
 
 Iteration 2:
+  Thought (LLM Reasoning): "Now I'll use grep to search for 'error' in the found files."
   Thought: "现在在这些文件中搜索 'error'"
   Action: Grep(pattern="error", file_pattern="*.go")
   Observation: "在 8 个文件中找到 23 处匹配"
 
 Iteration 3:
+  Thought (LLM Reasoning): "Found the results. I should summarize them for the user."
   Thought: "搜索完成，现在总结结果"
   Action: (无工具调用，直接生成回答)
   Final Answer: "找到以下文件包含 error..."
+```
+
+**注意**: "Thought (LLM Reasoning)" 是由模型生成的推理内容（Chain of Thought），仅在支持的模型上显示（如 Claude 3.7 Sonnet with extended thinking）。普通的 "Thought" 是系统生成的标记。
+
+---
+
+## LLM Reasoning 支持
+
+### 概述
+
+OxenCode 支持捕获和展示 LLM 的推理内容（Chain of Thought），让用户能够看到模型在执行工具调用前的思考过程。
+
+### 工作原理
+
+当使用支持 reasoning 的模型时（如 Claude 3.7 Sonnet with extended thinking），系统会：
+
+1. **捕获推理内容**: 通过 `OnReasoningDelta` 回调实时接收模型的推理文本
+2. **流式传输**: 将推理内容通过 `ProgressUpdate` channel 发送到 TUI
+3. **实时展示**: TUI 使用 💭 图标展示推理内容，位于工具调用之前
+
+### 数据流
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  LLM Reasoning 数据流                                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  fantasy.AgentStreamCall                                            │
+│    ├─ OnReasoningDelta("I need to search for...")  → ProgressUpdate│
+│    ├─ OnReasoningDelta("Let me use grep...")        → ProgressUpdate│
+│    ├─ OnToolCall(grep("pattern", "*.go"))           → ProgressUpdate│
+│    └─ OnToolResult("Found 3 matches...")            → ProgressUpdate│
+│                                                                     │
+│  ProgressUpdate Channel                                            │
+│    ├─ Type:"thought", Content:"I need to..."                       │
+│    ├─ Type:"thought", Content:"Let me use..."                      │
+│    ├─ Type:"action", Content:"grep(...)", ToolName:"grep"          │
+│    └─ Type:"observation", Content:"Found 3...", ToolName:"grep"    │
+│                                                                     │
+│  TUI Display                                                        │
+│    💭 I need to search for...                                      │
+│    💭 Let me use grep tool...                                      │
+│    🔧 grep("pattern", "*.go")                                      │
+│    ✓ Found 3 matches...                                            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Provider 兼容性
+
+| Provider | Reasoning 支持 | 配置方式 | 说明 |
+|----------|----------------|----------|------|
+| Anthropic (Claude 3.7+) | ✅ 支持 | `thinking_budget` (token 数字) | 需设置 budget_tokens |
+| OpenAI (o1 系列) | ✅ 支持 | `thinking_effort` (枚举) | minimal/low/medium/high |
+| OpenRouter | ✅ 支持 | `thinking_enabled` 或 `thinking_effort` | 推荐，支持 Qwen 等 |
+| Qwen (通过 OpenRouter) | ✅ 支持 | `thinking_enabled` | 自动传递 enable_thinking |
+| Qwen (直接) | ⚠️ 部分支持 | - | 需使用 OpenRouter 获得完整支持 |
+| DeepSeek, GLM | ⚠️ 取决于模型 | `thinking_effort` | 需模型支持 |
+| Google Gemini | ❌ 不支持 | - | 回调不会触发，不影响功能 |
+
+**配置示例**:
+
+```toml
+# Anthropic Claude
+thinking_enabled = true
+thinking_budget = 20000
+
+# OpenAI (o1 系列)
+thinking_enabled = true
+thinking_effort = "medium"
+
+# OpenRouter (推荐用于 Qwen 等)
+thinking_enabled = true
+# 可选: thinking_effort = "medium"
+
+# Qwen 通过 OpenRouter (最佳体验)
+provider = "openrouter"
+model = "qwen/qwen-max"
+thinking_enabled = true
+```
+
+**注意**: Qwen (通义千问) 的 `enable_thinking` 参数需要通过 OpenAI 兼容 API 的 `extra_body` 传递。当前 fantasy 库的 openaicompat provider 不支持 extra_body，因此建议使用 OpenRouter provider 访问 Qwen 模型以获得完整的 thinking 支持。
+
+### 实现
+
+在 `NewAgent` 中通过 `buildProviderOptions` 配置 extended thinking，支持多种 provider：
+
+```go
+func buildProviderOptions(cfg *config.Config, log logger.Logger) fantasy.ProviderOptions {
+    if !cfg.ThinkingEnabled {
+        return nil
+    }
+
+    switch cfg.Provider {
+    case config.ProviderAnthropic:
+        if cfg.ThinkingBudget > 0 {
+            trueVal := true
+            budgetTokens := int64(cfg.ThinkingBudget)
+            anthropicOpts := &anthropic.ProviderOptions{
+                SendReasoning: &trueVal,
+                Thinking: &anthropic.ThinkingProviderOption{
+                    BudgetTokens: budgetTokens,
+                },
+            }
+            return anthropic.NewProviderOptions(anthropicOpts)
+        }
+
+    case config.ProviderOpenAI, config.ProviderOpenAICompat:
+        if cfg.ThinkingEffort != "" {
+            effort := openai.ReasoningEffort(cfg.ThinkingEffort)
+            openaicompatOpts := &openaicompat.ProviderOptions{
+                ReasoningEffort: &effort,
+            }
+            return openaicompat.NewProviderOptions(openaicompatOpts)
+        }
+    }
+
+    return nil
+}
+```
+
+在 Agent 创建时应用配置：
+
+```go
+providerOpts := buildProviderOptions(cfg, log)
+agentOpts := []fantasy.AgentOption{
+    fantasy.WithMaxOutputTokens(int64(cfg.MaxTokens)),
+    fantasy.WithTemperature(cfg.Temperature),
+    fantasy.WithTools(fantasyTools...),
+}
+if providerOpts != nil {
+    agentOpts = append(agentOpts, fantasy.WithProviderOptions(providerOpts))
+}
+agent := fantasy.NewAgent(model, agentOpts...)
+```
+
+在 `ChatWithToolsWithProgress` 中注册 `OnReasoningDelta` 回调以捕获推理内容：
+
+```go
+result, err := a.agent.Stream(ctx, fantasy.AgentStreamCall{
+    Prompt:       userMessage,
+    Messages:     messages,
+    ActiveTools:  toolNames,
+    // 捕获 LLM 推理内容
+    OnReasoningDelta: func(id, text string) error {
+        a.logger.Debug("Reasoning delta", "length", len(text))
+        sendProgress("thought", text, "")
+        return nil
+    },
+    // ... 其他回调
+})
 ```
 
 ---

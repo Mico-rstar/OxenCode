@@ -427,7 +427,11 @@ func (m Model) handleReActStep(msg ReActStepMsg) (tea.Model, tea.Cmd) {
 					status = message.StatusError
 				}
 				m.messages[i].UpdateToolCall(msg.ToolName, msg.Content, status, "")
+			case "thought":
+				// thought 类型使用累积方式，避免每个字符创建一行
+				m.messages[i].AppendReActStep(msg.StepType, msg.Content)
 			default:
+				// 其他类型使用添加方式
 				m.messages[i].AddReActStep(msg.StepType, msg.Content)
 			}
 			break

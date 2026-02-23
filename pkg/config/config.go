@@ -54,6 +54,13 @@ type Config struct {
 	// 工具配置
 	ToolTimeout int `mapstructure:"tool_timeout"` // 工具执行超时时间（秒），默认 120
 
+	// Extended Thinking 配置
+	// Anthropic Claude: token 预算（数字），0 表示不启用
+	// OpenAI/OpenAICompat: reasoning_effort (字符串: minimal, low, medium, high)
+	ThinkingBudget    int    `mapstructure:"thinking_budget"`    // Anthropic: token 预算
+	ThinkingEffort    string `mapstructure:"thinking_effort"`    // OpenAI: reasoning effort level
+	ThinkingEnabled   bool   `mapstructure:"thinking_enabled"`   // 通用开关，启用推理功能
+
 	// 系统提示词配置
 	PromptDir string `mapstructure:"prompt_dir"` // 系统提示词目录，默认为 internal/prompt
 }
@@ -100,6 +107,9 @@ func Load() (*Config, error) {
 	v.SetDefault("temperature", 0.7)
 	v.SetDefault("work_dir", ".")
 	v.SetDefault("tool_timeout", 120)
+	v.SetDefault("thinking_budget", 0)
+	v.SetDefault("thinking_effort", "")
+	v.SetDefault("thinking_enabled", false)
 	v.SetDefault("prompt_dir", "internal/prompt")
 
 	// 尝试读取用户配置文件
