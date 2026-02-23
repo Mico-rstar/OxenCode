@@ -396,15 +396,15 @@ func (m Model) handleChatWithToolsComplete(msg ChatWithToolsCompleteMsg) (tea.Mo
 		if m.messages[i].ID == msg.MessageID {
 			if msg.Error != nil {
 				m.messages[i].SetError(msg.Error)
-				m.appState = StateError
 			} else {
 				m.messages[i].AppendContent(msg.Response)
 				m.messages[i].Complete()
-				m.appState = StateIdle
 			}
 			break
 		}
 	}
+	m.appState = StateIdle
+
 	return m, nil
 }
 
