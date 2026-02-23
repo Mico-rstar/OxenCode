@@ -16,17 +16,31 @@ type AgentToolAdapter struct {
 
 // NewAgentToolAdapter 创建一个新的 fantasy.AgentTool 适配器
 func NewAgentToolAdapter(tool Tool) fantasy.AgentTool {
-	// 解析 parameters
-	var params map[string]any
-	if err := json.Unmarshal(tool.Parameters(), &params); err != nil {
+	// 解析完整的 JSON Schema
+	var fullSchema map[string]any
+	if err := json.Unmarshal(tool.Parameters(), &fullSchema); err != nil {
 		// 如果解析失败，使用空 map
-		params = make(map[string]any)
+		fullSchema = make(map[string]any)
 	}
 
-	// 提取必填字段
+	// 提取 properties（ToolInfo.Parameters 应该只包含参数定义，不是完整 schema）
+	properties := make(map[string]any)
+	if props, ok := fullSchema["properties"].(map[string]any); ok {
+		properties = props
+	}
+
+	// 提取必填字段（支持 []string 和 []any 两种类型）
 	required := []string{}
-	if req, ok := params["required"].([]string); ok {
+	if req, ok := fullSchema["required"].([]string); ok {
 		required = req
+	} else if reqAny, ok := fullSchema["required"].([]any); ok {
+		// JSON 解码可能将 []string 解析为 []any
+		required = make([]string, 0, len(reqAny))
+		for _, r := range reqAny {
+			if s, ok := r.(string); ok {
+				required = append(required, s)
+			}
+		}
 	}
 
 	return &AgentToolAdapter{
@@ -34,7 +48,7 @@ func NewAgentToolAdapter(tool Tool) fantasy.AgentTool {
 		info: fantasy.ToolInfo{
 			Name:        tool.Name(),
 			Description: tool.Description(),
-			Parameters:  params,
+			Parameters:  properties,
 			Required:    required,
 			Parallel:    false,
 		},

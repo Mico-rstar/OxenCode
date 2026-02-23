@@ -543,3 +543,149 @@ func BenchmarkEditTool_SimpleReplacement(b *testing.B) {
 		})
 	}
 }
+
+// TestAgentToolAdapter_SchemaStructure 测试 AgentToolAdapter 的 schema 结构
+// 这个测试验证了问题的根本原因：
+// ToolInfo.Parameters 应该只包含 properties，而不是完整的 JSON Schema
+func TestAgentToolAdapter_SchemaStructure(t *testing.T) {
+	_, env := setupTestEnv(t)
+	bashTool := NewBashTool(env, nil)
+
+	// 创建 adapter
+	adapter := NewAgentToolAdapter(bashTool)
+	info := adapter.Info()
+
+	// 验证 info.Parameters 只包含 properties，不包含 type、required 等顶层字段
+	// 这是 fantasy 库 ToolInfo 的期望格式
+
+	// 1. Parameters 应该不包含 "type" 字段（因为它应该只有 properties）
+	if _, hasType := info.Parameters["type"]; hasType {
+		t.Errorf("BUG DETECTED: info.Parameters should not contain 'type' field. "+
+			"Parameters should only contain property definitions, not the full schema. "+
+			"Got: %+v", info.Parameters)
+	}
+
+	// 2. Parameters 应该不包含 "required" 字段（required 在 ToolInfo.Required 中）
+	if _, hasRequired := info.Parameters["required"]; hasRequired {
+		t.Errorf("BUG DETECTED: info.Parameters should not contain 'required' field. "+
+			"Required fields should be in ToolInfo.Required, not in Parameters. "+
+			"Got: %+v", info.Parameters)
+	}
+
+	// 3. Parameters 应该不包含 "properties" 字段（它本身就是 properties）
+	if _, hasProps := info.Parameters["properties"]; hasProps {
+		t.Errorf("BUG DETECTED: info.Parameters should not contain 'properties' field. "+
+			"Parameters IS the properties map, not a wrapper containing it. "+
+			"Got: %+v", info.Parameters)
+	}
+
+	// 4. Parameters 应该包含实际的参数定义（如 "command", "dir", "timeout"）
+	expectedParams := []string{"command", "dir", "timeout"}
+	for _, param := range expectedParams {
+		if _, exists := info.Parameters[param]; !exists {
+			t.Errorf("Expected parameter '%s' not found in info.Parameters. Got: %+v",
+				param, info.Parameters)
+		}
+	}
+
+	// 5. 验证 command 参数的结构
+	commandParam, exists := info.Parameters["command"]
+	if !exists {
+		t.Fatal("command parameter not found")
+	}
+
+	commandMap, ok := commandParam.(map[string]any)
+	if !ok {
+		t.Fatalf("command parameter should be a map, got: %T", commandParam)
+	}
+
+	if commandMap["type"] != "string" {
+		t.Errorf("command parameter type should be 'string', got: %v", commandMap["type"])
+	}
+
+	// 6. 验证 required 字段在 ToolInfo.Required 中
+	if len(info.Required) == 0 {
+		t.Error("ToolInfo.Required should contain required field names")
+	}
+
+	hasCommand := false
+	for _, req := range info.Required {
+		if req == "command" {
+			hasCommand = true
+			break
+		}
+	}
+	if !hasCommand {
+		t.Errorf("ToolInfo.Required should contain 'command', got: %+v", info.Required)
+	}
+
+	t.Logf("✓ ToolInfo structure is correct:")
+	t.Logf("  - Name: %s", info.Name)
+	t.Logf("  - Description: %s", info.Description)
+	t.Logf("  - Parameters (only properties): %+v", info.Parameters)
+	t.Logf("  - Required: %+v", info.Required)
+}
+
+// TestAgentToolAdapter_SimulatedFantasyConversion 模拟 fantasy 库如何转换 ToolInfo
+// 这个测试展示了当 ToolInfo.Parameters 包含完整 schema 时会发生什么
+func TestAgentToolAdapter_SimulatedFantasyConversion(t *testing.T) {
+	_, env := setupTestEnv(t)
+	bashTool := NewBashTool(env, nil)
+
+	// 创建 adapter
+	adapter := NewAgentToolAdapter(bashTool)
+	info := adapter.Info()
+
+	// 模拟 fantasy 库在 agent.go 中的转换逻辑
+	// 来自 fantasy: inputSchema := map[string]any{
+	//     "type":       "object",
+	//     "properties": info.Parameters,
+	//     "required":   info.Required,
+	// }
+
+	inputSchema := map[string]any{
+		"type":       "object",
+		"properties": info.Parameters,
+		"required":   info.Required,
+	}
+
+	// 验证生成的 schema 结构
+	properties, ok := inputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("inputSchema['properties'] should be a map, got: %T", inputSchema["properties"])
+	}
+
+	// 检查是否有异常的字段（这些字段表明 Parameters 包含了完整 schema）
+	problemFields := []string{"type", "required", "properties"}
+	hasProblem := false
+
+	for _, field := range problemFields {
+		if _, exists := properties[field]; exists {
+			t.Errorf("ISSUE: inputSchema['properties'] contains '%s' field. "+
+				"This means ToolInfo.Parameters contains the full schema instead of just properties. "+
+				"Value: %+v", field, properties[field])
+			hasProblem = true
+		}
+	}
+
+	if hasProblem {
+		t.Logf("\nGenerated InputSchema (will be sent to DeepSeek):")
+		t.Logf("  type: %v", inputSchema["type"])
+		t.Logf("  properties: %+v", properties)
+		t.Logf("  required: %+v", inputSchema["required"])
+		t.Logf("\nWhen properties contains 'required' as an array, DeepSeek will reject it because:")
+		t.Logf("  the schema validator expects property values to be objects or booleans,")
+		t.Logf("  but finds an array ['command', ...] instead.")
+	}
+
+	// 验证正确的结构：properties 应该只包含参数定义
+	expectedParams := []string{"command", "dir", "timeout"}
+	for _, param := range expectedParams {
+		if _, exists := properties[param]; !exists {
+			t.Errorf("Expected parameter '%s' not found in properties. Got: %+v",
+				param, properties)
+		}
+	}
+
+	t.Logf("✓ InputSchema structure validation passed")
+}
