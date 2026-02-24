@@ -17,28 +17,29 @@ import (
 	openaicompat "charm.land/fantasy/providers/openaicompat"
 	openrouter "charm.land/fantasy/providers/openrouter"
 	vercel "charm.land/fantasy/providers/vercel"
+	"github.com/openai/openai-go/v2/option"
 
-	"github.com/yourname/oxencode/pkg/config"
-	"github.com/yourname/oxencode/pkg/logger"
 	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/internal/prompt"
 	"github.com/yourname/oxencode/internal/tools"
+	"github.com/yourname/oxencode/pkg/config"
+	"github.com/yourname/oxencode/pkg/logger"
 )
 
 // Agent AI Agent 核心结构
 type Agent struct {
-	agent         fantasy.Agent
-	config        *config.Config
-	history       []message.Message // 对话历史
-	toolRegistry  *tools.Registry   // 工具注册表
-	env           tools.Environment // 执行环境
-	logger        logger.Logger     // 日志记录器
+	agent        fantasy.Agent
+	config       *config.Config
+	history      []message.Message // 对话历史
+	toolRegistry *tools.Registry   // 工具注册表
+	env          tools.Environment // 执行环境
+	logger       logger.Logger     // 日志记录器
 }
 
 // ProgressUpdate 进度更新类型
 type ProgressUpdate struct {
-	Type    string // "thought", "action", "observation", "content", "error", "done"
-	Content string
+	Type     string // "thought", "action", "observation", "content", "error", "done"
+	Content  string
 	ToolName string // 仅用于 action 类型
 }
 
@@ -127,8 +128,8 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	systemPrompt := loadSystemPrompt(cfg, log)
 
 	return &Agent{
-		agent:        agent,
-		config:       cfg,
+		agent:  agent,
+		config: cfg,
 		history: []message.Message{
 			message.NewMessage(message.RoleSystem, systemPrompt),
 		},
@@ -309,6 +310,15 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 		return openaicompat.New(
 			openaicompat.WithBaseURL(baseURL),
 			openaicompat.WithAPIKey(apiKey),
+			// 使用 WithSDKOptions 传递 extra_body 参数
+			// 这相当于 Python 的 extra_body={"enable_thinking": True}
+			openaicompat.WithSDKOptions(
+				option.WithJSONSet("enable_thinking", true),
+				// Python 的 stream_options={"include_usage": True}
+				option.WithJSONSet("stream_options", map[string]any{
+					"include_usage": true,
+				}),
+			),
 		)
 
 	case config.ProviderDeepSeek:
@@ -381,7 +391,7 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) (<-chan stri
 
 		// 调用流式 API
 		result, err := a.agent.Stream(ctx, fantasy.AgentStreamCall{
-			Prompt: userMessage,
+			Prompt:   userMessage,
 			Messages: messages,
 			OnTextDelta: func(id, delta string) error {
 				fullResponse += delta
@@ -420,7 +430,7 @@ func (a *Agent) Chat(ctx context.Context, userMessage string) (string, error) {
 
 	// 调用 API
 	result, err := a.agent.Generate(ctx, fantasy.AgentCall{
-		Prompt: userMessage,
+		Prompt:   userMessage,
 		Messages: messages,
 	})
 
@@ -459,7 +469,7 @@ func (a *Agent) buildMessages() []fantasy.Message {
 			})
 		case message.RoleSystem:
 			messages = append(messages, fantasy.NewSystemMessage(msg.Content))
-		// RoleTool 暂时跳过，后续工具调用时实现
+			// RoleTool 暂时跳过，后续工具调用时实现
 		}
 	}
 
@@ -563,8 +573,8 @@ func (a *Agent) ChatWithTools(ctx context.Context, userMessage string) (string, 
 
 		// 调用 LLM
 		result, err := a.agent.Generate(ctx, fantasy.AgentCall{
-			Prompt:       userMessage,
-			Messages:     messages,
+			Prompt:      userMessage,
+			Messages:    messages,
 			ActiveTools: toolNames,
 		})
 
@@ -689,9 +699,9 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 
 		// 调用 LLM，使用 Stream 方法和回调来捕获工具调用事件
 		result, err := a.agent.Stream(ctx, fantasy.AgentStreamCall{
-			Prompt:       userMessage,
-			Messages:     messages,
-			ActiveTools:  toolNames,
+			Prompt:      userMessage,
+			Messages:    messages,
+			ActiveTools: toolNames,
 			// Reasoning callbacks - capture LLM thinking content
 			OnReasoningDelta: func(id, text string) error {
 				a.logger.Debug("Reasoning delta", "length", len(text))
@@ -803,7 +813,7 @@ func (a *Agent) ContinueReAct(ctx context.Context, currentMsg message.Message) (
 
 	// 调用 LLM（不需要 prompt，继续之前的对话）
 	result, err := a.agent.Generate(ctx, fantasy.AgentCall{
-		Messages:     messages,
+		Messages:    messages,
 		ActiveTools: toolNames,
 	})
 
@@ -1015,4 +1025,3 @@ func formatValue(v any) string {
 		return fmt.Sprintf("%v", v)
 	}
 }
-

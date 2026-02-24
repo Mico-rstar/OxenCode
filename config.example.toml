@@ -4,7 +4,7 @@
 # ====== Provider 配置 ======
 # 可选值: anthropic, openai, azure, bedrock, google, openrouter, vercel, openaicompat
 #          qwen, deepseek, glm
-provider = "deepseek"
+provider = "qwen"
 
 # ====== API Key ======
 # 大多数情况下可以通过环境变量设置，这里留空即可
@@ -15,8 +15,8 @@ provider = "deepseek"
 # Qwen: DASHSCOPE_API_KEY
 # DeepSeek: DEEPSEEK_API_KEY
 # GLM: ZHIPU_API_KEY
-# api_key = "sk-8440a58764c846c88183bfec2d94d279"
-api_key = "sk-2021bc4319604c458a338eb9575246a1"
+api_key = "sk-8440a58764c846c88183bfec2d94d279"
+# api_key = "sk-2021bc4319604c458a338eb9575246a1"
 
 # ====== 模型配置 ======
 # Anthropic Claude 模型
@@ -37,12 +37,12 @@ api_key = "sk-2021bc4319604c458a338eb9575246a1"
 # model = "qwen-turbo"
 # model = "qwen-plus"
 # model = "qwen-max"
-# model = "qwen-max-longcontext"
+model = "qwen3.5-plus"
 
 # DeepSeek 模型示例
 # model = "deepseek-chat"
 # model = "deepseek-coder"
-model = "deepseek-reasoner"
+# model = "deepseek-reasoner"
 
 # GLM (智谱清言) 模型示例
 # model = "glm-4-plus"
