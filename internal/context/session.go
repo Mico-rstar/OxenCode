@@ -29,8 +29,8 @@ type Session struct {
 	L2Strategy *CompressionStrategy `json:"l2_strategy"`
 
 	// 异步压缩管理
-	compressor    Compressor `json:"-"` // 压缩器
-	compressQueue chan *Page `json:"-"` // 压缩任务队列
+	compressor  Compressor   `json:"-"`  // 压缩器
+	compressWkr *CompressWorker `json:"-"` // 压缩工作器
 
 	// 归档目录
 	archiveDir string `json:"archive_dir"`
@@ -67,6 +67,10 @@ func DefaultSessionConfig() *SessionConfig {
 func NewSession(config *SessionConfig) (*Session, error) {
 	log := logger.New("context/session")
 
+	if config.Compressor == nil {
+		panic("Compressor is required, cannot create Session without it")
+	}
+
 	l0Strategy, l1Strategy, l2Strategy := DefaultCompressionStrategies()
 
 	session := &Session{
@@ -80,7 +84,6 @@ func NewSession(config *SessionConfig) (*Session, error) {
 		L1Strategy:   l1Strategy,
 		L2Strategy:   l2Strategy,
 		compressor:   config.Compressor,
-		compressQueue: make(chan *Page, 100), // 缓冲队列
 		archiveDir:   config.ArchiveDir,
 		logger:       log,
 		initialized:  true,
@@ -91,8 +94,10 @@ func NewSession(config *SessionConfig) (*Session, error) {
 		session.archiveDir = "~/.local/share/oxencode/archive"
 	}
 
-	// 启动异步压缩 worker
-	go session.compressWorker()
+	// 创建并启动压缩工作器
+	workerConfig := DefaultCompressWorkerConfig()
+	session.compressWkr = NewCompressWorker(config.Compressor, workerConfig)
+	go session.processCompressResults()
 
 	session.logger.Info("Session created", "id", session.ID, "max_l1_pages", session.MaxL1Pages)
 	return session, nil
@@ -137,8 +142,16 @@ func (s *Session) Commit(ctx context.Context) error {
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
 	l1Page.Messages = currentL2.Messages
 
-	// 将 L1 page 加入压缩队列
-	s.compressQueue <- l1Page
+	// 先添加到 L1Pages（未压缩状态）
+	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
+
+	// 将 L1 page 提交给压缩工作器
+	if s.compressWkr == nil {
+		panic("CompressWorker is nil, cannot submit compress task")
+	}
+	if err := s.compressWkr.Submit(l1Page, 0); err != nil {
+		return fmt.Errorf("failed to submit compress task: %w", err)
+	}
 
 	// 创建新的 L2 page 用于收集新消息
 	s.L2Pages = append([]*Page{NewL2Page()}, s.L2Pages...)
@@ -183,38 +196,38 @@ func (s *Session) GetContext() []message.Message {
 	return messages
 }
 
-// compressWorker 异步压缩 worker
-func (s *Session) compressWorker() {
-	for page := range s.compressQueue {
-		s.doCompress(page)
+// processCompressResults 处理压缩结果
+func (s *Session) processCompressResults() {
+	for result := range s.compressWkr.Results() {
+		if result.Error != nil {
+			s.logger.Error("Compression failed", "page_id", result.PageID, "error", result.Error)
+			continue
+		}
+
+		s.logger.Info("Compress result received", "page_id", result.PageID)
+
+		// 查找并更新对应的 page
+		s.mu.Lock()
+		var page *Page
+		for i := range s.L1Pages {
+			if s.L1Pages[i].ID == result.PageID {
+				page = s.L1Pages[i]
+				break
+			}
+		}
+
+		if page != nil {
+			page.Content = result.Content
+			// 检查是否需要压缩 L0
+			if len(s.L1Pages) > s.MaxL1Pages {
+				s.compressL0Locked()
+			}
+			s.logger.Info("Page processed", "page_id", result.PageID)
+		} else {
+			s.logger.Warn("Page not found", "page_id", result.PageID)
+		}
+		s.mu.Unlock()
 	}
-}
-
-// doCompress 执行压缩
-func (s *Session) doCompress(page *Page) {
-	ctx, cancel := context.WithTimeout(context.Background(), page.Strategy.Timeout)
-	defer cancel()
-
-	s.logger.Info("Compressing page", "page_id", page.ID, "type", page.Type)
-
-	// 执行压缩
-	if err := page.Compress(ctx, s.compressor); err != nil {
-		s.logger.Error("Compression failed", "page_id", page.ID, "error", err)
-		// 压缩失败，保留原始消息
-		page.Content = fmt.Sprintf("[Compression failed: %v]", err)
-	}
-
-	// 压缩完成，添加到 L1 pages
-	s.mu.Lock()
-	s.L1Pages = append([]*Page{page}, s.L1Pages...)
-
-	// 检查是否需要压缩 L0
-	if len(s.L1Pages) > s.MaxL1Pages {
-		s.compressL0Locked()
-	}
-	s.mu.Unlock()
-
-	s.logger.Info("Page compressed", "page_id", page.ID, "type", page.Type)
 }
 
 // compressL0Locked 压缩 L0 page（需要持有锁）
@@ -295,6 +308,8 @@ type SessionStats struct {
 
 // Close 关闭 Session
 func (s *Session) Close() {
-	close(s.compressQueue)
+	if s.compressWkr != nil {
+		s.compressWkr.Stop()
+	}
 	s.logger.Info("Session closed", "id", s.ID)
 }
