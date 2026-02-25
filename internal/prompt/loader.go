@@ -93,3 +93,8 @@ func (l *Loader) LoadRaw() (string, error) {
 
 	return string(content), nil
 }
+
+// SplitLines 将文本分割为行
+func SplitLines(text string) []string {
+	return strings.Split(text, "\n")
+}
