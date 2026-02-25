@@ -81,6 +81,7 @@ func (p *Page) Compress(ctx context.Context, compressor Compressor) error {
 	return nil
 }
 
+// TODO: 返回 []message.Message
 // Render 渲染页面内容为 fantasy.Message 格式
 func (p *Page) Render() string {
 	if p.Content != "" {
@@ -116,6 +117,7 @@ func (p *Page) Archive(archiveDir string) (string, error) {
 	return archiveFile, nil
 }
 
+// TODO: 可能没用，需要删除
 // LoadFromArchive 从归档文件加载消息
 func (p *Page) LoadFromArchive() error {
 	if p.ArchivedFile == "" {
