@@ -21,6 +21,74 @@
 - message: 上下文系统最小单位，包括用户输出，工具调用，assitant回答，系统提示词等信息
 - LX: L2代表原始message集合，L1代表被压缩为Page粒度，L0本质上只有1个Page，是将多个Page压缩为一个Page得到的特殊的Page
 
+# Core struct
+注意，以下只写出关键字段和方法，实际设计应该具体情况具体分析
+## Page
+```go
+// Page 维护一轮交互的所有 message
+type Page struct {
+    ID           PageID
+	// 压缩策略
+	Strategy    *CompressionStrategy `json:"strategy"`   // 压缩策略配置
+	// 内容缓存
+	Content     string            `json:"content"`      // 根据 schema 压缩后的内容缓存
+	// 原始消息归档
+	ArchivedFile    string        `json:"archived_file"` // 归档文件路径
+    // 标识类型
+    Type           PageType        `json:"type"`         // 标识 L0 L1 L2         
+}
+
+
+```
+
+## CompressedStrategy
+```go
+// CompressionStrategy 压缩策略
+type CompressionStrategy struct {
+	MaxCompressionRate float64       `json:"max_compression_rate"` // 最大压缩率
+	MinCompressionRate float64       `json:"min_compression_rate"` // 最小压缩率
+	Schema             string        `json:"schema"`               // 压缩使用的 schema 模板
+    Skill              string        `json:"skill"`                // 压缩模型具有通用的系统提示词，skill可以用于为特定压缩任务定义工作流和few-shot示例
+	CompressionModel   string        `json:"compression_model"`    // 用于压缩的模型标识
+	Timeout            time.Duration `json:"timeout"`              // 压缩超时时间
+}
+```
+如果没有配置 CompressionModel，那么不进行任何压缩，用于L2级Page的生成
+
+
+## session
+```go
+// Session 上下文会话，管理完整的上下文窗口
+type Session struct {
+
+	// 上下文窗口 (system -> L0 -> L1 -> L2)
+	SystemPrompt    string      `json:"system_prompt"`    // 系统 Prompt（缓存）
+	L0Page          PageID       `json:"l0_page"`          // 全局唯一的 L0 Page
+	L1Pages         []PageID     `json:"l1_pages"`         // L1 Pages 列表（按时间倒序）
+	L2Pages         []PageID     `json:"l2_pages"`         // L2 Pages 列表（按时间倒序）
+
+	// 配置
+	MaxL1Pages      int         `json:"max_l1_pages"`     // L1 Page 最大数量
+	L1Strategy      *CompressionStrategy `json:"l1_strategy"`
+	L2Strategy      *CompressionStrategy `json:"l2_strategy"`
+	L0Strategy      *CompressionStrategy `json:"l0_strategy"`
+
+	// 异步压缩管理
+	compressor      *Compressor `json:"-"`               // 压缩器
+	compressQueue   chan *Page  `json:"-"`               // 压缩任务队列
+}
+```
+
+## Compressor
+```go
+type Compressor interface {
+    Compress(ctx context.Context, raw string, strategy *CompressionStrategy) (output string) // 需要有重试机制，确保满足CompressionStrategy的限制
+
+}
+```
+
+
+
 
 # How
 ## Context window overview
@@ -49,11 +117,9 @@ L2: 仍在进行的交互，或者系统尚未处理的messages，按照一轮�
 ### L0 -> L1
 #### Given
 - L1 Page达到容量上限，自动压缩前n Pages
-- 当L1 Page总数大于 n时，由小模型判断当前任务和前n pages相关性较低，自主触发压缩
-**注意：n pages也可以改为token阈值**
 
 #### How
-- 通过L0定义的schema压缩n pages，将压缩后的信息**追加**到原来的 L0 Page中
+- 将old L0 page.content + n L1 pages.content 拼接作为输入，通过L0 schema生成new L0 page；L0 Page的archivedFile追加n L1 Pages的archivedFile的内容到末尾 
 - schema定义可能的角度：核心概念提取，检索关键词，摘要信息,...
 
 #### Common cases 
@@ -62,3 +128,52 @@ L2: 仍在进行的交互，或者系统尚未处理的messages，按照一轮�
 #### Boundary cases
 1. 压缩goroutine超时
 2. 上下文增长速度超过压缩goroutine的处理速度
+
+
+# schema & strategy definition
+## L1
+对一轮交互进行的摘要，应该保留用户给的任务是什么，用户意图是什么，agent做了什么事，工具执行结果和关键返回，任务完成的状态等信息，而对于详细的工具执行输出日志这类低密度信息要简要舍弃
+### schema 
+```markdown
+# user input
+用户的原始输入是什么，用户意图是什么
+
+# Agent Actions
+Agent 执行了哪些操作（工具调用），每个操作的关键结果是什么
+- 工具名称: 简要描述
+- 工具名称: 简要描述
+- Agent输出摘要
+
+# Task Status
+当前任务的完成状态是什么（进行中/已完成/遇到问题）
+
+# Key Information
+这轮对话中的关键信息（代码片段、配置、重要发现、错误、矛盾等）
+```
+
+
+## L0
+L0 Page是对历史page的高层次概括，应该明确过去做了用户问了什么，agent做了什么，项目背景，关键代码片段，对项目结构的理解，代码风格等高层次信息
+### schema 
+```markdown
+# Project Context
+项目背景、技术栈、项目结构等
+
+# User Inputs
+- input1
+- input2
+- ...
+
+# Key Achievements
+已完成的主要工作
+
+# Key Information
+关键代码位置和片段、关键发现、矛盾错误
+
+# Core concepts
+核心概念、关键词以及简短的解释
+
+
+# Important Notes
+重要的约束条件、配置、代码风格等
+```
