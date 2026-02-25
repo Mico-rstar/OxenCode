@@ -19,6 +19,8 @@ import (
 	vercel "charm.land/fantasy/providers/vercel"
 	"github.com/openai/openai-go/v2/option"
 
+	ctxpkg "github.com/yourname/oxencode/internal/context"
+	ctxarchive "github.com/yourname/oxencode/internal/context/archive"
 	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/internal/prompt"
 	"github.com/yourname/oxencode/internal/tools"
@@ -30,10 +32,14 @@ import (
 type Agent struct {
 	agent        fantasy.Agent
 	config       *config.Config
-	history      []message.Message // 对话历史
+	history      []message.Message // 对话历史（兼容模式，未启用 context manager 时使用）
 	toolRegistry *tools.Registry   // 工具注册表
 	env          tools.Environment // 执行环境
 	logger       logger.Logger     // 日志记录器
+
+	// Context Manager（可选，用于长程任务）
+	ctxManager   ctxpkg.Manager
+	currentSession *ctxpkg.Session
 }
 
 // ProgressUpdate 进度更新类型
@@ -1024,4 +1030,157 @@ func formatValue(v any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// ========================================
+// Context Manager Integration Methods
+// ========================================
+
+// InitContextManager 初始化上下文管理器
+// 启用 context manager 后，Agent 将使用 session 管理上下文而非简单的 history 切片
+func (a *Agent) InitContextManager(ctx context.Context, provider fantasy.Provider, archiveDir string) error {
+	// 创建压缩器
+	var compressor ctxpkg.Compressor
+	var err error
+
+	compressor, err = ctxpkg.NewLLMCompressor(ctx, provider, &ctxpkg.LLMCompressorConfig{
+		Model: "claude-sonnet-4-5-20250514", // 使用较快的模型进行压缩
+	})
+	if err != nil {
+		a.logger.Warn("Failed to create LLM compressor, using mock", "error", err)
+		compressor = ctxpkg.NewMockCompressor(1024)
+	}
+
+	// 创建上下文管理器
+	mgr, err := ctxpkg.NewManager(&ctxpkg.ManagerConfig{
+		Compressor:   compressor,
+		ArchiveDir:   archiveDir,
+		DefaultPrompt: "", // 使用 Agent 现有的 system prompt
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create context manager: %w", err)
+	}
+
+	a.ctxManager = mgr
+
+	// 创建默认 session
+	session, err := mgr.NewSession(&ctxpkg.SessionConfig{
+		SystemPrompt: a.history[0].Content, // 使用第一个 system message
+		MaxL1Pages:   10,
+		Compressor:   compressor,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	a.currentSession = session
+	a.logger.Info("Context manager initialized", "session_id", session.ID)
+	return nil
+}
+
+// EnableContextManager 启用上下文管理器（如果已初始化）
+func (a *Agent) EnableContextManager() bool {
+	if a.ctxManager == nil {
+		return false
+	}
+	return true
+}
+
+// CommitSession 提交当前 session 进行压缩
+// 应该在每轮交互完成后调用
+func (a *Agent) CommitSession(ctx context.Context) error {
+	if a.currentSession == nil {
+		return nil // 未启用 context manager
+	}
+	return a.currentSession.Commit(ctx)
+}
+
+// AddMessageToSession 添加消息到 session
+func (a *Agent) AddMessageToSession(msg message.Message) {
+	if a.currentSession == nil {
+		// 降级到使用 history 切片
+		a.history = append(a.history, msg)
+		return
+	}
+	a.currentSession.AddMessage(msg)
+}
+
+// GetContextMessages 获取上下文消息
+// 如果启用了 context manager，返回 session 构建的上下文；否则返回 history
+func (a *Agent) GetContextMessages() []message.Message {
+	if a.currentSession == nil {
+		return a.history
+	}
+	return a.currentSession.GetContext()
+}
+
+// GetSessionStats 获取 session 统计信息
+func (a *Agent) GetSessionStats() ctxpkg.SessionStats {
+	if a.currentSession == nil {
+		return ctxpkg.SessionStats{}
+	}
+	return a.currentSession.GetStats()
+}
+
+// NewSession 创建新 session
+func (a *Agent) NewSession(systemPrompt string) (*ctxpkg.Session, error) {
+	if a.ctxManager == nil {
+		return nil, fmt.Errorf("context manager not initialized")
+	}
+
+	// 获取压缩器
+	var compressor ctxpkg.Compressor
+	compressor = ctxpkg.NewMockCompressor(1024) // 默认使用 mock
+
+	session, err := a.ctxManager.NewSession(&ctxpkg.SessionConfig{
+		SystemPrompt: systemPrompt,
+		MaxL1Pages:   10,
+		Compressor:   compressor,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	a.currentSession = session
+	a.logger.Info("New session created", "session_id", session.ID)
+	return session, nil
+}
+
+// SwitchSession 切换到指定 session
+func (a *Agent) SwitchSession(sessionID string) error {
+	if a.ctxManager == nil {
+		return fmt.Errorf("context manager not initialized")
+	}
+
+	session, err := a.ctxManager.GetSession(sessionID)
+	if err != nil {
+		return err
+	}
+
+	a.currentSession = session
+	a.logger.Info("Session switched", "session_id", sessionID)
+	return nil
+}
+
+// ListSessions 列出所有 session IDs
+func (a *Agent) ListSessions() []string {
+	if a.ctxManager == nil {
+		return []string{}
+	}
+	return a.ctxManager.ListSessions()
+}
+
+// GetCurrentSessionID 获取当前 session ID
+func (a *Agent) GetCurrentSessionID() string {
+	if a.currentSession == nil {
+		return ""
+	}
+	return a.currentSession.ID
+}
+
+// SearchArchive 搜索归档消息
+func (a *Agent) SearchArchive(query string, limit int) ([]ctxarchive.ArchiveEntry, error) {
+	// 这里可以扩展为通过 context.Manager 访问 archive.Manager
+	// 简化版本返回空结果
+	return []ctxarchive.ArchiveEntry{}, nil
 }

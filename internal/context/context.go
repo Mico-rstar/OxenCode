@@ -6,7 +6,6 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/yourname/oxencode/internal/context/archive"
-	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/pkg/logger"
 )
 
@@ -163,12 +162,15 @@ func NewLLMCompressorWithProvider(ctx context.Context, provider fantasy.Provider
 // Helper: 创建默认管理器
 func NewDefaultManager(ctx context.Context, provider fantasy.Provider, archiveDir string) (Manager, error) {
 	// 创建压缩器
-	compressor, err := NewLLMCompressor(ctx, provider, &LLMCompressorConfig{
+	var compressor Compressor
+	llmCompressor, err := NewLLMCompressor(ctx, provider, &LLMCompressorConfig{
 		Model: "claude-sonnet-4-5-20250514",
 	})
 	if err != nil {
 		// 压缩器创建失败，使用 mock 压缩器
 		compressor = NewMockCompressor(1024)
+	} else {
+		compressor = llmCompressor
 	}
 
 	return NewManager(&ManagerConfig{

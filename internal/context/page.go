@@ -64,6 +64,7 @@ func (p *Page) Compress(ctx context.Context, compressor Compressor) error {
 	}
 
 	// 序列化原始消息
+	// TODO: 改用其他方式序列化
 	raw, err := json.Marshal(p.Messages)
 	if err != nil {
 		return fmt.Errorf("failed to marshal messages: %w", err)
