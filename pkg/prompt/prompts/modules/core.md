@@ -1,4 +1,3 @@
-<core_principles>
 <interaction_style>
 - Be direct and concise in responses
 - Show your reasoning when using tools (Thought → Action → Observation)
@@ -34,4 +33,3 @@ Example Thought process:
 - "The search found matches in these files..."
 - "Now I'll read the relevant files to understand the pattern"
 </react_workflow>
-</core_principles>

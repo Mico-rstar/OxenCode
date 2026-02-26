@@ -64,7 +64,6 @@ func (p *Page) Compress(ctx context.Context, compressor Compressor) error {
 	}
 
 	// 序列化原始消息
-	// TODO: 改用其他方式序列化
 	raw, err := json.Marshal(p.Messages)
 	if err != nil {
 		return fmt.Errorf("failed to marshal messages: %w", err)
@@ -81,15 +80,10 @@ func (p *Page) Compress(ctx context.Context, compressor Compressor) error {
 	return nil
 }
 
-// TODO: 返回 []message.Message
+// 仅供L0 L1 使用，L2 直接返回原始 messages
 // Render 渲染页面内容为 fantasy.Message 格式
 func (p *Page) Render() string {
-	if p.Content != "" {
 		return p.Content
-	}
-	// 如果没有压缩内容，返回原始消息的序列化
-	data, _ := json.Marshal(p.Messages)
-	return string(data)
 }
 
 // Archive 归档原始消息到文件系统
@@ -115,27 +109,6 @@ func (p *Page) Archive(archiveDir string) (string, error) {
 	p.ArchivedFile = archiveFile
 	p.UpdatedAt = time.Now()
 	return archiveFile, nil
-}
-
-// TODO: 可能没用，需要删除
-// LoadFromArchive 从归档文件加载消息
-func (p *Page) LoadFromArchive() error {
-	if p.ArchivedFile == "" {
-		return fmt.Errorf("no archived file path")
-	}
-
-	data, err := os.ReadFile(p.ArchivedFile)
-	if err != nil {
-		return fmt.Errorf("failed to read archive file: %w", err)
-	}
-
-	var messages []message.Message
-	if err := json.Unmarshal(data, &messages); err != nil {
-		return fmt.Errorf("failed to unmarshal messages: %w", err)
-	}
-
-	p.Messages = messages
-	return nil
 }
 
 // GetTokenCount 估算页面的 token 数量

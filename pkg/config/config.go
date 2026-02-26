@@ -63,6 +63,12 @@ type Config struct {
 
 	// 系统提示词配置
 	PromptDir string `mapstructure:"prompt_dir"` // 系统提示词目录，默认为 internal/prompt
+
+	// Compressor 配置
+	CompressorModel       string  `mapstructure:"compressor_model"`        // 用于上下文压缩的模型
+	CompressorMaxTokens   int64     `mapstructure:"compressor_max_tokens"`   // 压缩时最大输出 token 数
+	CompressorTemperature float64 `mapstructure:"compressor_temperature"`  // 压缩时温度参数
+	CompressorMaxRetries  int     `mapstructure:"compressor_max_retries"`  // ReAct 循环最大重试次数
 }
 
 var cfg *Config
@@ -111,6 +117,12 @@ func Load() (*Config, error) {
 	v.SetDefault("thinking_effort", "")
 	v.SetDefault("thinking_enabled", false)
 	v.SetDefault("prompt_dir", "internal/prompt")
+
+	// Compressor 默认配置
+	v.SetDefault("compressor_model", "claude-sonnet-4-5-20250514")
+	v.SetDefault("compressor_max_tokens", 4096)
+	v.SetDefault("compressor_temperature", 0.3)
+	v.SetDefault("compressor_max_retries", 3)
 
 	// 尝试读取用户配置文件
 	configExists := true

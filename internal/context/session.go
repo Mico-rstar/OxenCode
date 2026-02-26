@@ -175,21 +175,18 @@ func (s *Session) GetContext() []message.Message {
 
 	// 2. 添加 L0 page（如果有）
 	if s.L0Page != nil {
-		messages = append(messages, message.NewMessage(message.RoleSystem, fmt.Sprintf("[Context L0]\n%s", s.L0Page.Render())))
+		messages = append(messages, message.NewMessage(message.RoleSystem, s.L0Page.Render()))
 	}
 
-	// 3. 添加 L1 pages（按时间倒序，最新的在前）
-	for i := len(s.L1Pages) - 1; i >= 0; i-- {
-		p := s.L1Pages[i]
+	// 3. 添加 L1 pages
+	for _, p := range s.L1Pages {
 		content := p.Render()
-		messages = append(messages, message.NewMessage(message.RoleSystem, fmt.Sprintf("[Context L1 - %s]\n%s", p.ID, content)))
+		messages = append(messages, message.NewMessage(message.RoleAssistant, content))
 	}
 
 	// 4. 添加 L2 pages（原始消息）
 	for _, p := range s.L2Pages {
-		for _, msg := range p.Messages {
-			messages = append(messages, msg)
-		}
+		messages = append(messages, p.Messages...)
 	}
 
 	s.logger.Debug("Context built", "total_messages", len(messages), "l1_count", len(s.L1Pages), "l2_count", len(s.L2Pages))
@@ -236,6 +233,7 @@ func (s *Session) compressL0Locked() {
 		return
 	}
 
+	// TODO: n由L1压缩百分比决定，该百分比将由配置文件决定
 	// 取出最旧的 n 个 L1 pages 进行压缩到 L0
 	n := len(s.L1Pages) - s.MaxL1Pages
 	oldL1Pages := s.L1Pages[len(s.L1Pages)-n:]

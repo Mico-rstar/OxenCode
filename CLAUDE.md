@@ -94,7 +94,7 @@ See `docs/context-manage-idea.md` for detailed design.
 These principles are **NON-NEGOTIABLE**. Violating any of these will result in unacceptable solutions.
 
 1. **ALWAYS reuse existing components first.**
-   - Check `pkg/` directory for reusable packages (logger, config, etc.)
+   - Check `pkg/` directory for reusable packages (logger, config, prompt etc.)
    - Never duplicate existing functionality without a compelling reason
 
 2. **ALWAYS solve the root cause directly.**
@@ -115,3 +115,5 @@ These principles are **NON-NEGOTIABLE**. Violating any of these will result in u
    - Before implementing new functionality, check for mature, production-ready libraries
    - If uncertain about whether a suitable library exists, ASK the human for a decision
    - Do NOT reinvent the wheel unless explicitly directed to do so
+  
+6. **ASK human for more context when anything not sure**

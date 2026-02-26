@@ -6,6 +6,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/yourname/oxencode/internal/context/archive"
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
 )
 
@@ -153,19 +154,16 @@ func (m *manager) Close() {
 }
 
 // Helper: 创建 LLM 压缩器（需要传入 fantasy provider）
-func NewLLMCompressorWithProvider(ctx context.Context, provider fantasy.Provider, model string) (Compressor, error) {
-	return NewLLMCompressor(ctx, provider, &LLMCompressorConfig{
-		Model: model,
-	})
+func NewLLMCompressorWithProvider(ctx context.Context, provider fantasy.Provider, cfg *config.Config, log logger.Logger) (Compressor, error) {
+	return NewLLMCompressor(ctx, provider, cfg, log)
 }
 
 // Helper: 创建默认管理器
-func NewDefaultManager(ctx context.Context, provider fantasy.Provider, archiveDir string) (Manager, error) {
+func NewDefaultManager(ctx context.Context, provider fantasy.Provider, archiveDir string, cfg *config.Config, log logger.Logger) (Manager, error) {
 	// 创建压缩器
 	var compressor Compressor
-	llmCompressor, err := NewLLMCompressor(ctx, provider, &LLMCompressorConfig{
-		Model: "claude-sonnet-4-5-20250514",
-	})
+	llmCompressor, err := NewLLMCompressor(ctx, provider, cfg, log)
+	// TODO: 静默降级到 Mock 压缩器是一种 workaround，应该直接报错让调用方决定如何处理
 	if err != nil {
 		// 压缩器创建失败，使用 mock 压缩器
 		compressor = NewMockCompressor(1024)

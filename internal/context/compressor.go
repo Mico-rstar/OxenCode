@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"charm.land/fantasy"
-	"github.com/yourname/oxencode/internal/prompt"
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
 )
 
@@ -23,20 +23,16 @@ type Compressor interface {
 type LLMCompressor struct {
 	agent  fantasy.Agent
 	logger logger.Logger
-}
-
-// LLMCompressorConfig LLMCompressor 配置
-type LLMCompressorConfig struct {
-	Model string
+	cfg    *config.Config
 }
 
 // NewLLMCompressor 创建 LLM 压缩器
-func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, config *LLMCompressorConfig) (*LLMCompressor, error) {
-	log := logger.New("context/compressor")
+func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, cfg *config.Config, lg logger.Logger) (*LLMCompressor, error) {
 
-	model := config.Model
+	// 从全局配置读取模型配置
+	model := cfg.CompressorModel
 	if model == "" {
-		model = "claude-sonnet-4-5-20250514" // 默认使用较快的模型
+		panic("Compressed model is needed")
 	}
 
 	llm, err := provider.LanguageModel(ctx, model)
@@ -44,35 +40,52 @@ func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, config *LL
 		return nil, fmt.Errorf("failed to create language model: %w", err)
 	}
 
-	// 创建压缩专用的 agent
-	// 使用简化的系统提示词，专注于压缩任务
-	systemPrompt := `You are a text compression assistant. Your task is to compress input text according to the given schema while preserving key information.
+	maxTokens := cfg.CompressorMaxTokens
+	if maxTokens == 0 {
+		maxTokens = 4096
+	}
 
-Guidelines:
-- Extract and preserve key information (code snippets, configurations, important findings)
-- Remove redundant details, verbose logs, and low-density information
-- Follow the schema structure strictly
-- Keep the compressed content concise but complete
-- Maintain readability and coherence`
+	temperature := cfg.CompressorTemperature
+	if temperature == 0 {
+		temperature = 0.3
+	}
 
 	agent := fantasy.NewAgent(llm,
-		fantasy.WithSystemPrompt(systemPrompt),
-		fantasy.WithMaxOutputTokens(4096),
-		fantasy.WithTemperature(0.3), // 较低的 temperature 确保更确定的输出
+		fantasy.WithSystemPrompt("You are a text compression assistant. Compress input according to the given schema, preserving key information while removing redundancy."),
+		fantasy.WithMaxOutputTokens(maxTokens),
+		fantasy.WithTemperature(temperature),
 	)
 
 	return &LLMCompressor{
 		agent:  agent,
-		logger: log,
+		logger: lg,
+		cfg: cfg,
+
 	}, nil
 }
 
-// Compress 实现 Compressor 接口
+// Compress 实现 Compressor 接口，带有 ReAct 循环和超时控制
 func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *CompressionStrategy) (string, error) {
-	c.logger.Debug("Compressing content", "raw_length", len(raw), "schema_length", len(strategy.Schema))
+	// 超时控制
+	if strategy.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, strategy.Timeout)
+		defer cancel()
+	}
 
-	// 构建压缩提示词
-	promptText := fmt.Sprintf(`Please compress the following content according to this schema:
+	// ReAct 循环：不断压缩直到压缩率满足要求
+	var compressed string
+	var lastError error
+
+	for iteration := 0; iteration < c.cfg.CompressorMaxRetries; iteration++ {
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("compression timeout: %w", ctx.Err())
+		default:
+		}
+
+		// 构建压缩提示词
+		promptText := fmt.Sprintf(`Please compress the following content according to this schema:
 
 ## Schema
 %s
@@ -83,56 +96,112 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 ## Compressed Output
 `, strategy.Schema, raw)
 
-	// 调用 LLM 进行压缩
-	result, err := c.agent.Generate(ctx, fantasy.AgentCall{
-		Prompt: promptText,
-	})
+		// 如果是重试，添加压缩率调整提示
+		if iteration > 0 {
+			promptText = fmt.Sprintf(`Previous compression attempt did not meet compression rate requirements. Please adjust accordingly.
 
-	if err != nil {
-		c.logger.Error("LLM compression failed", "error", err)
-		return "", fmt.Errorf("LLM compression failed: %w", err)
-	}
+## Schema
+%s
 
-	// 提取响应内容
-	if result == nil || len(result.Response.Content) == 0 {
-		return "", fmt.Errorf("empty compression result")
-	}
+## Input Content
+%s
 
-	var compressed string
-	for _, c := range result.Response.Content {
-		if text, ok := c.(fantasy.TextContent); ok {
-			compressed += text.Text
+## Previous Compression Rate
+%0.2f
+
+## Rate Constraints
+- Maximum allowed rate: %0.2f (compressed/original)
+- Minimum required rate: %0.2f
+
+%s
+
+## Compressed Output
+`,
+				strategy.Schema,
+				raw,
+				float64(len(compressed))/float64(len(raw)),
+				strategy.MaxCompressionRate,
+				strategy.MinCompressionRate,
+				c.buildRateAdjustmentPrompt(compressed, raw, strategy),
+			)
+		}
+
+		// 调用 LLM 进行压缩
+		result, err := c.agent.Generate(ctx, fantasy.AgentCall{
+			Prompt: promptText,
+		})
+
+		if err != nil {
+			c.logger.Error("LLM compression failed", "error", err, "iteration", iteration)
+			lastError = err
+			continue
+		}
+
+		// 提取响应内容
+		if result == nil || len(result.Response.Content) == 0 {
+			c.logger.Error("Empty compression result", "iteration", iteration)
+			lastError = fmt.Errorf("empty compression result")
+			continue
+		}
+
+		compressed = ""
+		for _, content := range result.Response.Content {
+			if text, ok := content.(fantasy.TextContent); ok {
+				compressed += text.Text
+			}
+		}
+
+		// 验证压缩率
+		compressionRate := float64(len(compressed)) / float64(len(raw))
+		c.logger.Debug("Compression attempt complete",
+			"iteration", iteration,
+			"raw_length", len(raw),
+			"compressed_length", len(compressed),
+			"compression_rate", compressionRate,
+			"min_rate", strategy.MinCompressionRate,
+			"max_rate", strategy.MaxCompressionRate,
+		)
+
+		// 检查压缩率是否在允许范围内
+		if compressionRate <= strategy.MaxCompressionRate && compressionRate >= strategy.MinCompressionRate {
+			c.logger.Info("Compression rate within acceptable range", "rate", compressionRate)
+			return compressed, nil
+		}
+
+		// 压缩率不符合要求，继续重试
+		if compressionRate > strategy.MaxCompressionRate {
+			c.logger.Warn("Compression rate exceeded maximum, will retry",
+				"rate", compressionRate, "max", strategy.MaxCompressionRate)
+		} else {
+			c.logger.Warn("Compression rate below minimum, will retry",
+				"rate", compressionRate, "min", strategy.MinCompressionRate)
 		}
 	}
 
-	// 验证压缩率
-	compressionRate := float64(len(compressed)) / float64(len(raw))
-	c.logger.Debug("Compression complete",
-		"raw_length", len(raw),
-		"compressed_length", len(compressed),
-		"compression_rate", compressionRate,
-		"min_rate", strategy.MinCompressionRate,
-		"max_rate", strategy.MaxCompressionRate,
-	)
-
-	if compressionRate > strategy.MaxCompressionRate {
-		c.logger.Warn("Compression rate exceeded maximum",
-			"rate", compressionRate,
-			"max", strategy.MaxCompressionRate)
-		// 压缩率过高，尝试进一步压缩或警告
+	// 达到最大重试次数，返回最后一次结果
+	if lastError != nil {
+		return "", fmt.Errorf("compression failed after %d attempts: %w", c.cfg.CompressorMaxRetries, lastError)
 	}
 
-	if compressionRate < strategy.MinCompressionRate {
-		c.logger.Warn("Compression rate below minimum",
-			"rate", compressionRate,
-			"min", strategy.MinCompressionRate)
-		// 压缩率过低，可能丢失信息
-	}
-
+	c.logger.Warn("Compression completed but rate constraints not met, returning best effort",
+		"final_rate", float64(len(compressed))/float64(len(raw)))
 	return compressed, nil
 }
 
+// buildRateAdjustmentPrompt 根据压缩率情况构建调整提示
+func (c *LLMCompressor) buildRateAdjustmentPrompt(compressed string, raw string, strategy *CompressionStrategy) string {
+	compressionRate := float64(len(compressed)) / float64(len(raw))
+
+	if compressionRate > strategy.MaxCompressionRate {
+		return "Please compress FURTHER. Remove more redundant details, verbose logs, and low-density information. Be more aggressive in summarization while preserving key information."
+	} else if compressionRate < strategy.MinCompressionRate {
+		return "Please preserve MORE information. The compression is too aggressive. Include more details about agent actions, key findings, code snippets, and important context while still following the schema structure."
+	}
+	return ""
+}
+
 // MockCompressor 用于测试的模拟压缩器
+// TODO: Compressor 测试完成后删除
 type MockCompressor struct {
 	MaxOutputLength int
 }
@@ -151,10 +220,10 @@ func (c *MockCompressor) Compress(ctx context.Context, raw string, strategy *Com
 		return raw, nil
 	}
 
-	// 使用 prompt loader 提取 schema 的关键信息作为前缀
+	// 使用 SplitLines 提取 schema 的关键信息作为前缀
 	schemaPreview := ""
 	if strategy.Schema != "" {
-		lines := prompt.SplitLines(strategy.Schema)
+		lines := splitLines(strategy.Schema)
 		if len(lines) > 5 {
 			lines = lines[:5]
 		}
@@ -165,4 +234,20 @@ func (c *MockCompressor) Compress(ctx context.Context, raw string, strategy *Com
 
 	return fmt.Sprintf("[Compressed]\nSchema:\n%s\n\n... (truncated from %d to %d chars)",
 		schemaPreview, len(raw), c.MaxOutputLength), nil
+}
+
+// splitLines 将文本分割为行（避免导入 prompt 包造成循环依赖）
+func splitLines(text string) []string {
+	result := []string{}
+	current := ""
+	for _, ch := range text {
+		if ch == '\n' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(ch)
+		}
+	}
+	result = append(result, current)
+	return result
 }

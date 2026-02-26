@@ -22,10 +22,10 @@ import (
 	ctxpkg "github.com/yourname/oxencode/internal/context"
 	ctxarchive "github.com/yourname/oxencode/internal/context/archive"
 	"github.com/yourname/oxencode/internal/message"
-	"github.com/yourname/oxencode/internal/prompt"
 	"github.com/yourname/oxencode/internal/tools"
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/prompt"
 )
 
 // Agent AI Agent 核心结构
@@ -236,15 +236,14 @@ func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 		promptDir = "internal/prompt"
 	}
 
-	loader := prompt.NewLoader(promptDir)
-	systemPrompt, err := loader.Load()
-	if err != nil {
+	p := prompt.New(promptDir)
+	if err := p.Load(); err != nil {
 		log.Warn("Failed to load system prompt from file, using default", "error", err, "promptDir", promptDir)
 		return getDefaultSystemPrompt()
 	}
 
-	log.Info("System prompt loaded", "source", promptDir, "length", len(systemPrompt))
-	return systemPrompt
+	log.Info("System prompt loaded", "source", promptDir, "length", len(p.SystemPrompt))
+	return p.SystemPrompt
 }
 
 // getDefaultSystemPrompt 获取默认系统提示词
@@ -1043,9 +1042,8 @@ func (a *Agent) InitContextManager(ctx context.Context, provider fantasy.Provide
 	var compressor ctxpkg.Compressor
 	var err error
 
-	compressor, err = ctxpkg.NewLLMCompressor(ctx, provider, &ctxpkg.LLMCompressorConfig{
-		Model: "claude-sonnet-4-5-20250514", // 使用较快的模型进行压缩
-	})
+	// 使用全局配置创建压缩器
+	compressor, err = ctxpkg.NewLLMCompressor(ctx, provider, a.config, a.logger)
 	if err != nil {
 		a.logger.Warn("Failed to create LLM compressor, using mock", "error", err)
 		compressor = ctxpkg.NewMockCompressor(1024)

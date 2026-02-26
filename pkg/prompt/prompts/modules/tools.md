@@ -1,4 +1,3 @@
-<tool_guidance>
 **Available Tools:**
 
 **Glob** - Find files by pattern
@@ -27,4 +26,3 @@
 - Answering general programming questions
 - Explaining concepts that don't require codebase inspection
 - Providing code examples not related to current files
-</tool_guidance>

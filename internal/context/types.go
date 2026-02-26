@@ -35,6 +35,7 @@ type CompressionStrategy struct {
 	Timeout time.Duration `json:"timeout"` // 压缩超时时间
 }
 
+// TODO: 用config来配置参数
 // DefaultCompressionStrategies 返回默认的压缩策略配置
 func DefaultCompressionStrategies() (L0, L1, L2 *CompressionStrategy) {
 	// L1 策略：轻度压缩，保留较多细节

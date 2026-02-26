@@ -2,7 +2,6 @@ package archive
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/yourname/oxencode/internal/message"
@@ -64,6 +63,15 @@ func TestManager(t *testing.T) {
 		}
 	})
 
+	t.Run("ReadNotFound", func(t *testing.T) {
+		mgr, _ := NewManager(tmpDir)
+
+		_, err := mgr.Read("non-existent-page")
+		if err == nil {
+			t.Error("Expected error when reading non-existent page")
+		}
+	})
+
 	t.Run("Delete", func(t *testing.T) {
 		mgr, _ := NewManager(tmpDir)
 
@@ -102,125 +110,58 @@ func TestManager(t *testing.T) {
 			t.Error("Expected total size to be greater than 0")
 		}
 	})
-}
-
-// TestFileStore 测试文件存储
-func TestFileStore(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	t.Run("NewFileStore", func(t *testing.T) {
-		store, err := NewFileStore(tmpDir)
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if store == nil {
-			t.Fatal("Expected store to be created")
-		}
-	})
-
-	t.Run("StoreAndLoad", func(t *testing.T) {
-		store, _ := NewFileStore(tmpDir)
-
-		messages := []message.Message{
-			message.NewMessage(message.RoleUser, "store test"),
-			message.NewMessage(message.RoleAssistant, "response"),
-		}
-
-		// 存储
-		path, err := store.Store("store-test-1", messages)
-		if err != nil {
-			t.Fatalf("Expected no error on store, got %v", err)
-		}
-		if path == "" {
-			t.Error("Expected path to be returned")
-		}
-
-		// 加载
-		loaded, err := store.Load("store-test-1")
-		if err != nil {
-			t.Fatalf("Expected no error on load, got %v", err)
-		}
-		if len(loaded) != 2 {
-			t.Errorf("Expected 2 messages, got %d", len(loaded))
-		}
-	})
-
-	t.Run("Exists", func(t *testing.T) {
-		store, _ := NewFileStore(tmpDir)
-
-		// 存储一个
-		store.Store("exists-test", []message.Message{
-			message.NewMessage(message.RoleUser, "test"),
-		})
-
-		if !store.Exists("exists-test") {
-			t.Error("Expected archive to exist")
-		}
-		if store.Exists("non-existent") {
-			t.Error("Expected non-existent archive to not exist")
-		}
-	})
-
-	t.Run("Cache", func(t *testing.T) {
-		store, _ := NewFileStore(tmpDir)
-
-		messages := []message.Message{
-			message.NewMessage(message.RoleUser, "cache test"),
-		}
-
-		// 第一次存储
-		store.Store("cache-test", messages)
-
-		// 第一次加载（应该从文件）
-		store.Load("cache-test")
-
-		// 第二次加载（应该从缓存）
-		stats := store.GetCacheStats()
-		if stats.CacheSize == 0 {
-			t.Error("Expected cache to have entries")
-		}
-
-		// 清除缓存
-		store.ClearCache()
-		stats = store.GetCacheStats()
-		if stats.CacheSize != 0 {
-			t.Error("Expected cache to be cleared")
-		}
-	})
 
 	t.Run("List", func(t *testing.T) {
 		// Use a separate temp directory for this test to avoid pollution
 		listTmpDir := t.TempDir()
-		store, _ := NewFileStore(listTmpDir)
+		mgr, _ := NewManager(listTmpDir)
 
-		// 存储几个
-		store.Store("list-1", []message.Message{message.NewMessage(message.RoleUser, "1")})
-		store.Store("list-2", []message.Message{message.NewMessage(message.RoleUser, "2")})
-		store.Store("list-3", []message.Message{message.NewMessage(message.RoleUser, "3")})
+		// 归档几个
+		mgr.Archive("list-1", "l1", []message.Message{message.NewMessage(message.RoleUser, "1")})
+		mgr.Archive("list-2", "l1", []message.Message{message.NewMessage(message.RoleUser, "2")})
+		mgr.Archive("list-3", "l1", []message.Message{message.NewMessage(message.RoleUser, "3")})
 
-		ids, err := store.List()
+		entries, err := mgr.List(10)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
-		if len(ids) != 3 {
-			t.Errorf("Expected 3 IDs, got %d", len(ids))
+		if len(entries) != 3 {
+			t.Errorf("Expected 3 entries, got %d", len(entries))
 		}
 	})
 
-	t.Run("Delete", func(t *testing.T) {
-		store, _ := NewFileStore(tmpDir)
+	t.Run("Search", func(t *testing.T) {
+		searchTmpDir := t.TempDir()
+		mgr, _ := NewManager(searchTmpDir)
 
-		store.Store("delete-test", []message.Message{
-			message.NewMessage(message.RoleUser, "to delete"),
+		// 归档带关键词的消息
+		mgr.Archive("search-1", "l1", []message.Message{
+			message.NewMessage(message.RoleUser, "hello world"),
+		})
+		mgr.Archive("search-2", "l1", []message.Message{
+			message.NewMessage(message.RoleUser, "foo bar"),
 		})
 
-		err := store.Delete("delete-test")
+		// 搜索
+		results, err := mgr.Search("hello", 10)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result, got %d", len(results))
+		}
+	})
 
-		if store.Exists("delete-test") {
-			t.Error("Expected archive to be deleted")
+	t.Run("EmptyArchive", func(t *testing.T) {
+		mgr, _ := NewManager(tmpDir)
+
+		messages := []message.Message{}
+		filePath, err := mgr.Archive("empty-page", "l1", messages)
+		if err != nil {
+			t.Fatalf("Expected no error on empty archive, got %v", err)
+		}
+		if filePath == "" {
+			t.Error("Expected file path to be returned for empty archive")
 		}
 	})
 }
@@ -234,30 +175,5 @@ func TestEstimateTokenCount(t *testing.T) {
 	count := estimateTokenCount(messages)
 	if count == 0 {
 		t.Error("Expected token count to be greater than 0")
-	}
-}
-
-// TestFileStorePathGeneration 测试文件路径生成
-func TestFileStorePathGeneration(t *testing.T) {
-	tmpDir := t.TempDir()
-	store, _ := NewFileStore(tmpDir)
-
-	// 测试长 ID 生成子目录
-	longID := "abcdef123456"
-	expectedSubdir := filepath.Join(tmpDir, "ab", longID+".json")
-	actualPath := store.getFilePath(longID)
-
-	// 检查是否包含正确的子目录
-	if actualPath != expectedSubdir {
-		t.Errorf("Expected path %s, got %s", expectedSubdir, actualPath)
-	}
-
-	// 测试短 ID 不生成子目录
-	shortID := "a"
-	expectedShort := filepath.Join(tmpDir, shortID+".json")
-	actualShort := store.getFilePath(shortID)
-
-	if actualShort != expectedShort {
-		t.Errorf("Expected path %s, got %s", expectedShort, actualShort)
 	}
 }
