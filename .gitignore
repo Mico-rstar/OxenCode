@@ -53,3 +53,5 @@ build/
 test/
 
 oxencode
+
+snapshot/

@@ -101,6 +101,7 @@ func NewModel() Model {
 
 	// 创建 Agent
 	ag, err := agent.NewAgent(cfg)
+	ag.EnableSnapshot("snapshot")
 	if err != nil {
 		// Agent 创建失败（可能是没有 API key）
 		return Model{

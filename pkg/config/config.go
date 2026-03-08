@@ -62,7 +62,7 @@ type Config struct {
 	ThinkingEnabled   bool   `mapstructure:"thinking_enabled"`   // 通用开关，启用推理功能
 
 	// 系统提示词配置
-	PromptDir string `mapstructure:"prompt_dir"` // 系统提示词目录，默认为 internal/prompt
+	PromptDir string `mapstructure:"prompt_dir"` // 系统提示词目录，默认为 pkg/prompt
 
 	// Compressor 配置
 	CompressorModel       string  `mapstructure:"compressor_model"`        // 用于上下文压缩的模型
@@ -76,6 +76,10 @@ type Config struct {
 
 	// Page 兜底配置
 	MaxPageTokens int `mapstructure:"max_page_tokens"` // 单Page最大token数，防止单任务上下文过长
+
+	// ReAct 循环配置
+	MaxReActIterations  int `mapstructure:"max_react_iterations"`   // ReAct 循环最大迭代次数
+	ToolOutputMaxLength int `mapstructure:"tool_output_max_length"` // 工具输出最大长度，0表示使用默认值
 }
 
 var cfg *Config
@@ -123,7 +127,7 @@ func Load() (*Config, error) {
 	v.SetDefault("thinking_budget", 0)
 	v.SetDefault("thinking_effort", "")
 	v.SetDefault("thinking_enabled", false)
-	v.SetDefault("prompt_dir", "internal/prompt")
+	v.SetDefault("prompt_dir", "pkg/prompt/prompts")
 
 	// Compressor 默认配置
 	v.SetDefault("compressor_model", "claude-sonnet-4-5-20250514")

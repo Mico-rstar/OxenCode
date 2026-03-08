@@ -2,10 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"charm.land/fantasy"
@@ -30,16 +27,24 @@ import (
 
 // Agent AI Agent 核心结构
 type Agent struct {
-	agent        fantasy.Agent
+	// 核心组件
+	reactLoop    *ReActLoop            // 自实现的 ReAct 循环
+	provider     fantasy.Provider      // fantasy Provider（多 Provider 支持）
+	model        fantasy.LanguageModel // fantasy LanguageModel
+	session      *ctxpkg.Session       // 上下文会话
+
+	// 通用字段
 	config       *config.Config
-	history      []message.Message // 对话历史（兼容模式，未启用 context manager 时使用）
-	toolRegistry *tools.Registry   // 工具注册表
-	env          tools.Environment // 执行环境
-	logger       logger.Logger     // 日志记录器
+	toolRegistry *tools.Registry     // 工具注册表
+	env          tools.Environment   // 执行环境
+	logger       logger.Logger       // 日志记录器
 
 	// Context Manager（可选，用于长程任务）
-	ctxManager   ctxpkg.Manager
+	ctxManager     ctxpkg.Manager
 	currentSession *ctxpkg.Session
+
+	// 快照管理器（用于调试和监控）
+	snapshotManager *SnapshotManager
 }
 
 // ProgressUpdate 进度更新类型
@@ -109,155 +114,73 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 
 	log.Info("Tools registered", "count", len(registry.Names()))
 
-	// 将工具转换为 fantasy.AgentTool
-	fantasyTools := tools.ToolsToAgentTools(registry.List())
-
-	// 构建 ProviderOptions
-	providerOpts := buildProviderOptions(cfg, log)
-
-	// 创建 Agent 选项
-	agentOpts := []fantasy.AgentOption{
-		fantasy.WithMaxOutputTokens(int64(cfg.MaxTokens)),
-		fantasy.WithTemperature(cfg.Temperature),
-		fantasy.WithTools(fantasyTools...),
-	}
-
-	// 如果有 ProviderOptions，添加到选项中
-	if providerOpts != nil {
-		agentOpts = append(agentOpts, fantasy.WithProviderOptions(providerOpts))
-	}
-
-	// 创建 Agent 并注册工具
-	agent := fantasy.NewAgent(model, agentOpts...)
-
 	// 加载系统提示词
 	systemPrompt := loadSystemPrompt(cfg, log)
 
+	// 创建 Session
+	var session *ctxpkg.Session
+	var compressor ctxpkg.Compressor
+
+	// 尝试创建压缩器
+	compressor, err = ctxpkg.NewLLMCompressorWithProvider(context.Background(), provider, cfg, log)
+	if err != nil {
+		log.Warn("Failed to create LLM compressor, using mock", "error", err)
+		compressor = ctxpkg.NewMockCompressor(1024)
+	}
+
+	// 创建 Session
+	session, err = ctxpkg.NewSession(&ctxpkg.SessionConfig{
+		SystemPrompt: systemPrompt,
+		MaxL1Pages:   10,
+		Compressor:   compressor,
+		Cfg:          cfg,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// 创建 ReActLoop
+	reactLoop := NewReActLoop(&ReActLoopConfig{
+		Model:        model,
+		Session:      session,
+		Registry:     registry,
+		Env:          env,
+		Config:       cfg,
+		Logger:       log,
+		SystemPrompt: systemPrompt,
+	})
+
 	return &Agent{
-		agent:  agent,
-		config: cfg,
-		history: []message.Message{
-			message.NewMessage(message.RoleSystem, systemPrompt),
-		},
+		reactLoop:    reactLoop,
+		provider:     provider,
+		model:        model,
+		session:      session,
+		config:       cfg,
 		toolRegistry: registry,
 		env:          env,
 		logger:       log,
 	}, nil
 }
 
-// buildProviderOptions 根据 provider 配置构建 ProviderOptions
-func buildProviderOptions(cfg *config.Config, log logger.Logger) fantasy.ProviderOptions {
-	// 检查是否启用了 thinking 功能
-	if !cfg.ThinkingEnabled {
-		return nil
-	}
 
-	switch cfg.Provider {
-	case config.ProviderAnthropic:
-		// Anthropic: 使用 thinking_budget (token 预算)
-		if cfg.ThinkingBudget > 0 {
-			trueVal := true
-			budgetTokens := int64(cfg.ThinkingBudget)
-			anthropicOpts := &anthropic.ProviderOptions{
-				SendReasoning: &trueVal,
-				Thinking: &anthropic.ThinkingProviderOption{
-					BudgetTokens: budgetTokens,
-				},
-			}
-			log.Info("Extended thinking enabled", "provider", "anthropic", "budget_tokens", cfg.ThinkingBudget)
-			return anthropic.NewProviderOptions(anthropicOpts)
-		}
-
-	case config.ProviderOpenAI, config.ProviderOpenAICompat, config.ProviderVercel:
-		// OpenAI 兼容: 使用 reasoning_effort
-		if cfg.ThinkingEffort != "" {
-			validEfforts := map[string]openai.ReasoningEffort{
-				"minimal": openai.ReasoningEffortMinimal,
-				"low":     openai.ReasoningEffortLow,
-				"medium":  openai.ReasoningEffortMedium,
-				"high":    openai.ReasoningEffortHigh,
-			}
-			if effort, ok := validEfforts[strings.ToLower(cfg.ThinkingEffort)]; ok {
-				openaicompatOpts := &openaicompat.ProviderOptions{
-					ReasoningEffort: &effort,
-				}
-				log.Info("Reasoning effort enabled", "provider", cfg.Provider, "effort", cfg.ThinkingEffort)
-				return openaicompat.NewProviderOptions(openaicompatOpts)
-			}
-			log.Warn("Invalid reasoning_effort value", "value", cfg.ThinkingEffort, "valid", "minimal, low, medium, high")
-		}
-
-	case config.ProviderOpenRouter:
-		// OpenRouter: 可以使用 reasoning_effort 或 extra_body
-		if cfg.ThinkingEffort != "" {
-			trueVal := true
-			openrouterOpts := &openrouter.ProviderOptions{
-				Reasoning: &openrouter.ReasoningOptions{
-					Enabled: &trueVal,
-					Effort:  (*openrouter.ReasoningEffort)(&cfg.ThinkingEffort),
-				},
-				// 为 Qwen 等模型添加 enable_thinking 参数
-				ExtraBody: map[string]any{
-					"enable_thinking": true,
-				},
-			}
-			log.Info("Reasoning effort enabled", "provider", "openrouter", "effort", cfg.ThinkingEffort)
-			return openrouter.NewProviderOptions(openrouterOpts)
-		}
-		// 如果只是启用 thinking 但没有指定 effort，为 Qwen 等添加 enable_thinking
-		if cfg.ThinkingEnabled && cfg.ThinkingEffort == "" {
-			openrouterOpts := &openrouter.ProviderOptions{
-				ExtraBody: map[string]any{
-					"enable_thinking": true,
-				},
-			}
-			log.Info("Thinking enabled via extra_body", "provider", "openrouter")
-			return openrouter.NewProviderOptions(openrouterOpts)
-		}
-
-	case config.ProviderQwen:
-		// Qwen: 注意 - 由于 fantasy 库限制，无法通过 openaicompat.ProviderOptions 传递 enable_thinking
-		// 建议：
-		// 1. 使用 OpenRouter provider 访问 Qwen 模型，可以正确传递 enable_thinking
-		// 2. 或等待 fantasy 库更新支持 extra_body
-		if cfg.ThinkingEnabled {
-			log.Warn("Qwen thinking via openaicompat is not fully supported", "suggestion", "use OpenRouter provider instead")
-		}
-	}
-
-	return nil
-}
 
 // loadSystemPrompt 加载系统提示词
 func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 	// 尝试从 prompt 目录加载
 	promptDir := cfg.PromptDir
-	if promptDir == "" {
-		promptDir = "internal/prompt"
-	}
 
 	p := prompt.New(promptDir)
 	if err := p.Load(); err != nil {
 		log.Warn("Failed to load system prompt from file, using default", "error", err, "promptDir", promptDir)
-		return getDefaultSystemPrompt()
+		panic("System prompt not found")
 	}
 
 	log.Info("System prompt loaded", "source", promptDir, "length", len(p.SystemPrompt))
 	return p.SystemPrompt
 }
 
-// getDefaultSystemPrompt 获取默认系统提示词
-func getDefaultSystemPrompt() string {
-	return "You are a helpful AI programming assistant."
-}
 
-// ReloadSystemPrompt 重新加载系统提示词
-func (a *Agent) ReloadSystemPrompt() error {
-	newPrompt := loadSystemPrompt(a.config, a.logger)
-	a.SetSystemPrompt(newPrompt)
-	a.logger.Info("System prompt reloaded")
-	return nil
-}
+
 
 // createProvider 根据 provider 类型创建对应的 provider
 func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error) {
@@ -365,64 +288,13 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 
 // ClearHistory 清空对话历史
 func (a *Agent) ClearHistory() {
-	a.history = []message.Message{}
-}
-
-// GetHistory 获取对话历史
-func (a *Agent) GetHistory() []message.Message {
-	return a.history
-}
-
-// SetSystemPrompt 设置系统提示
-func (a *Agent) SetSystemPrompt(prompt string) {
-	// 移除旧的系统消息
-	newHistory := make([]message.Message, 0, len(a.history))
-	for _, msg := range a.history {
-		if msg.Role != message.RoleSystem {
-			newHistory = append(newHistory, msg)
-		}
+	// 创建新的空 Session
+	if a.session != nil {
+		a.session = nil
 	}
-
-	// 添加新的系统消息
-	systemMsg := message.NewMessage(message.RoleSystem, prompt)
-	newHistory = append([]message.Message{systemMsg}, newHistory...)
-
-	a.history = newHistory
 }
 
-// ExecuteTool 执行工具调用
-func (a *Agent) ExecuteTool(ctx context.Context, toolName string, input map[string]any) (string, error) {
-	a.logger.Debug("Executing tool", "tool", toolName, "input", input)
 
-	// 获取工具
-	tool := a.toolRegistry.Get(toolName)
-	if tool == nil {
-		a.logger.Error("Tool not found", "tool", toolName)
-		return "", fmt.Errorf("tool not found: %s", toolName)
-	}
-
-	// 参数验证
-	if err := tool.Validate(input); err != nil {
-		a.logger.Error("Parameter validation failed", "tool", toolName, "error", err)
-		return "", fmt.Errorf("parameter validation failed: %w", err)
-	}
-
-	// 执行工具
-	output, err := tool.Execute(ctx, input)
-	if err != nil {
-		a.logger.Error("Tool execution failed", "tool", toolName, "error", err)
-		return "", fmt.Errorf("tool execution failed: %w", err)
-	}
-
-	a.logger.Info("Tool executed successfully", "tool", toolName, "outputLength", len(output))
-
-	return output, nil
-}
-
-// GetToolSchemas 获取所有工具的 schema（用于传递给 LLM）
-func (a *Agent) GetToolSchemas() []map[string]any {
-	return a.toolRegistry.GetToolSchemas()
-}
 
 // ChatWithToolsWithProgress 进行支持工具调用的对话（带进度更新）
 // 返回一个 channel 用于异步推送进度更新和完成信号
@@ -435,277 +307,67 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 
 		a.logger.Info("Starting ChatWithToolsWithProgress", "messageLength", len(userMessage))
 
-		// 辅助函数：发送进度更新
-		sendProgress := func(updateType, content string, toolName string) {
-			select {
-			case ch <- ProgressUpdate{Type: updateType, Content: content, ToolName: toolName}:
-			case <-ctx.Done():
-			}
-		}
+		// 初始快照
+		a.TakeSnapshot("start")
 
-		// 发送初始 thought
-		// sendProgress("thought", "User is asking: "+userMessage, "")
-
-		// 添加用户消息到历史
-		userMsg := message.NewMessage(message.RoleUser, userMessage)
-		a.history = append(a.history, userMsg)
-
-		// 构建消息列表
-		messages := a.buildMessagesWithTools()
-
-		// 获取工具名称列表
-		toolNames := a.toolRegistry.Names()
-
-		// 调用 LLM，使用 Stream 方法和回调来捕获工具调用事件
-		result, err := a.agent.Stream(ctx, fantasy.AgentStreamCall{
-			Prompt:      userMessage,
-			Messages:    messages,
-			ActiveTools: toolNames,
-			// Reasoning callbacks - capture LLM thinking content
-			OnReasoningDelta: func(id, text string) error {
-				a.logger.Debug("Reasoning delta", "length", len(text))
-				sendProgress("thought", text, "")
-				return nil
-			},
-			// Tool execution callbacks
-			OnToolCall: func(toolCall fantasy.ToolCallContent) error {
-				// 解析工具输入
-				var toolInput map[string]any
-				if err := json.Unmarshal([]byte(toolCall.Input), &toolInput); err != nil {
-					a.logger.Warn("Failed to parse tool input", "error", err)
-					toolInput = map[string]any{}
+		// 设置回调
+		a.reactLoop.SetCallbacks(&Callbacks{
+			OnThought: func(text string) {
+				select {
+				case ch <- ProgressUpdate{Type: "thought", Content: text}:
+				case <-ctx.Done():
 				}
-
-				// 格式化工具调用参数为函数调用形式，如 glob("**/*.go")
-				inputStr := formatToolCall(toolCall.ToolName, toolInput)
-				a.logger.Info("Tool call", "tool", toolCall.ToolName, "callID", toolCall.ToolCallID)
-				sendProgress("action", inputStr, toolCall.ToolName)
-				return nil
 			},
-			OnToolResult: func(result fantasy.ToolResultContent) error {
-				// 提取工具执行结果
-				var observation string
-				var isError bool
-
-				switch content := result.Result.(type) {
-				case *fantasy.ToolResultOutputContentText:
-					observation = content.Text
-				case fantasy.ToolResultOutputContentText:
-					observation = content.Text
-				case *fantasy.ToolResultOutputContentError:
-					observation = content.Error.Error()
-					isError = true
-				case fantasy.ToolResultOutputContentError:
-					observation = content.Error.Error()
-					isError = true
-				case *fantasy.ToolResultOutputContentMedia:
-					observation = content.Text
-					if content.Data != "" {
-						if observation != "" {
-							observation += "\n"
-						}
-						observation += fmt.Sprintf("[Media: %s, %d bytes]", content.MediaType, len(content.Data))
-					}
-				case fantasy.ToolResultOutputContentMedia:
-					observation = content.Text
-					if content.Data != "" {
-						if observation != "" {
-							observation += "\n"
-						}
-						observation += fmt.Sprintf("[Media: %s, %d bytes]", content.MediaType, len(content.Data))
-					}
-				default:
-					observation = fmt.Sprintf("%v", result.Result)
+			OnAction: func(toolName, input string) {
+				// 工具调用时拍摄快照
+				a.TakeSnapshot("tool_" + toolName)
+				select {
+				case ch <- ProgressUpdate{Type: "action", Content: input, ToolName: toolName}:
+				case <-ctx.Done():
 				}
-
-				// 截断过长的观察结果
-				if len(observation) > 500 {
-					observation = observation[:500] + "\n... (truncated)"
-				}
-
-				a.logger.Info("Tool result", "toolName", result.ToolName, "isError", isError, "observationLength", len(observation))
-				sendProgress("observation", observation, result.ToolName)
-				return nil
 			},
-			OnFinish: func(result *fantasy.AgentResult) {
-				a.logger.Info("Agent finished", "steps", len(result.Steps))
+			OnObservation: func(toolName, output string) {
+				// 工具结果返回后拍摄快照
+				a.TakeSnapshot("result_" + toolName)
+				select {
+				case ch <- ProgressUpdate{Type: "observation", Content: output, ToolName: toolName}:
+				case <-ctx.Done():
+				}
+			},
+			OnContent: func(text string) {
+				select {
+				case ch <- ProgressUpdate{Type: "content", Content: text}:
+				case <-ctx.Done():
+				}
+			},
+			OnError: func(err error) {
+				select {
+				case ch <- ProgressUpdate{Type: "error", Content: err.Error()}:
+				case <-ctx.Done():
+				}
+			},
+			OnSnapshot: func(event string) {
+				a.TakeSnapshot(event)
 			},
 		})
 
-		if err != nil {
-			a.logger.Error("LLM generation failed", "error", err)
-			sendProgress("error", err.Error(), "")
-			return
-		}
-
-		// 提取最终响应内容
-		var finalText strings.Builder
-		for _, c := range result.Response.Content {
-			switch content := c.(type) {
-			case fantasy.TextContent:
-				finalText.WriteString(content.Text)
+		// 流式执行
+		for event := range a.reactLoop.Stream(ctx, userMessage) {
+			select {
+			case ch <- ProgressUpdate{
+				Type:     event.Type,
+				Content:  event.Content,
+				ToolName: event.ToolName,
+			}:
+			case <-ctx.Done():
+				return
 			}
 		}
-
-		finalResponse := finalText.String()
-
-		// 添加助手响应到历史
-		assistantMsg := message.NewMessage(message.RoleAssistant, finalResponse)
-		a.history = append(a.history, assistantMsg)
-
-		// 发送完成信号
-		sendProgress("done", finalResponse, "")
 	}()
 
 	return ch
 }
 
-
-// buildMessagesWithTools 构建包含工具调用结果的消息列表
-func (a *Agent) buildMessagesWithTools() []fantasy.Message {
-	messages := make([]fantasy.Message, 0, len(a.history))
-
-	for _, msg := range a.history {
-		switch msg.Role {
-		case message.RoleUser:
-			messages = append(messages, fantasy.NewUserMessage(msg.Content))
-
-		case message.RoleAssistant:
-			// Assistant 消息需要手动构建
-			messages = append(messages, fantasy.Message{
-				Role:    fantasy.MessageRoleAssistant,
-				Content: []fantasy.MessagePart{fantasy.TextPart{Text: msg.Content}},
-			})
-
-		case message.RoleSystem:
-			messages = append(messages, fantasy.NewSystemMessage(msg.Content))
-
-		case message.RoleTool:
-			// 工具结果消息
-			messages = append(messages, fantasy.Message{
-				Role:    fantasy.MessageRoleUser, // 工具结果作为用户消息发送
-				Content: []fantasy.MessagePart{fantasy.TextPart{Text: msg.Content}},
-			})
-		}
-	}
-
-	return messages
-}
-
-// formatToolCall 将工具调用格式化为函数调用形式，如 glob("**/*.go") 或 grep("pattern", "path")
-func formatToolCall(toolName string, input map[string]any) string {
-	if len(input) == 0 {
-		return toolName + "()"
-	}
-
-	// 定义参数顺序（让常用参数显示在前面）
-	paramOrder := map[string]int{
-		"pattern":   0,
-		"path":      1,
-		"filePath":  1,
-		"query":     0,
-		"search":    0,
-		"directory": 1,
-	}
-
-	// 按顺序排列参数
-	type orderedParam struct {
-		key   string
-		value any
-	}
-	var params []orderedParam
-
-	// 首先添加有定义顺序的参数
-	for key, value := range input {
-		if _, ok := paramOrder[key]; ok {
-			params = append(params, orderedParam{key, value})
-		}
-	}
-	// 按定义顺序排序
-	sort.Slice(params, func(i, j int) bool {
-		orderI, okI := paramOrder[params[i].key]
-		orderJ, okJ := paramOrder[params[j].key]
-		if !okI {
-			orderI = 999
-		}
-		if !okJ {
-			orderJ = 999
-		}
-		if orderI != orderJ {
-			return orderI < orderJ
-		}
-		return params[i].key < params[j].key
-	})
-
-	// 然后添加其他参数
-	for key, value := range input {
-		if _, ok := paramOrder[key]; !ok {
-			params = append(params, orderedParam{key, value})
-		}
-	}
-
-	// 格式化参数
-	var args []string
-	for _, p := range params {
-		argStr := formatValue(p.value)
-		// 如果参数名不是常见的位置参数，显示参数名
-		if _, ok := paramOrder[p.key]; !ok && len(params) > 1 {
-			args = append(args, p.key+"="+argStr)
-		} else {
-			args = append(args, argStr)
-		}
-	}
-
-	// 对于单个参数且是 pattern/query 等常见参数，简化显示
-	if len(args) == 1 {
-		if firstParam, ok := input["pattern"]; ok {
-			return fmt.Sprintf("%s(%s)", toolName, formatValue(firstParam))
-		}
-		if firstParam, ok := input["query"]; ok {
-			return fmt.Sprintf("%s(%s)", toolName, formatValue(firstParam))
-		}
-		if firstParam, ok := input["search"]; ok {
-			return fmt.Sprintf("%s(%s)", toolName, formatValue(firstParam))
-		}
-	}
-
-	return fmt.Sprintf("%s(%s)", toolName, strings.Join(args, ", "))
-}
-
-// formatValue 格式化参数值
-func formatValue(v any) string {
-	switch val := v.(type) {
-	case string:
-		// 字符串加引号，但如果太长则截断
-		if len(val) > 50 {
-			return fmt.Sprintf("\"%s...\"", val[:50])
-		}
-		return fmt.Sprintf("\"%s\"", val)
-	case []any:
-		// 数组格式化
-		var parts []string
-		for _, item := range val {
-			parts = append(parts, formatValue(item))
-		}
-		return fmt.Sprintf("[%s]", strings.Join(parts, ", "))
-	case map[string]any:
-		// 对象简化显示
-		if len(val) == 0 {
-			return "{}"
-		}
-		var parts []string
-		for k, kv := range val {
-			parts = append(parts, fmt.Sprintf("%s: %s", k, formatValue(kv)))
-		}
-		return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
-// ========================================
-// Context Manager Integration Methods
-// ========================================
 
 // InitContextManager 初始化上下文管理器
 // 启用 context manager 后，Agent 将使用 session 管理上下文而非简单的 history 切片
@@ -736,7 +398,7 @@ func (a *Agent) InitContextManager(ctx context.Context, provider fantasy.Provide
 
 	// 创建默认 session
 	session, err := mgr.NewSession(&ctxpkg.SessionConfig{
-		SystemPrompt: a.history[0].Content, // 使用第一个 system message
+		SystemPrompt: a.reactLoop.systemPrompt, // 使用 ReActLoop 的系统提示词
 		MaxL1Pages:   10,
 		Compressor:   compressor,
 	})
@@ -769,18 +431,16 @@ func (a *Agent) CommitSession(ctx context.Context) error {
 // AddMessageToSession 添加消息到 session
 func (a *Agent) AddMessageToSession(msg message.Message) {
 	if a.currentSession == nil {
-		// 降级到使用 history 切片
-		a.history = append(a.history, msg)
-		return
+		return // 没有 session
 	}
 	a.currentSession.AddMessage(msg)
 }
 
 // GetContextMessages 获取上下文消息
-// 如果启用了 context manager，返回 session 构建的上下文；否则返回 history
+// 如果启用了 context manager，返回 session 构建的上下文
 func (a *Agent) GetContextMessages() []message.Message {
 	if a.currentSession == nil {
-		return a.history
+		return []message.Message{}
 	}
 	return a.currentSession.GetContext()
 }
