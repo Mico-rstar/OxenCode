@@ -7,9 +7,10 @@ import (
 	"charm.land/fantasy"
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/prompt"
 )
 
-// Compressor 压缩器接口
+// Compressor 压缩器接口（仅用于L0压缩）
 type Compressor interface {
 	// Compress 压缩原始内容
 	// ctx: 上下文，用于控制超时
@@ -19,15 +20,16 @@ type Compressor interface {
 	Compress(ctx context.Context, raw string, strategy *CompressionStrategy) (string, error)
 }
 
-// LLMCompressor 使用 LLM 进行文本压缩的实现
+// LLMCompressor 使用 LLM 进行文本压缩的实现（仅用于L0压缩）
 type LLMCompressor struct {
-	agent  fantasy.Agent
-	logger logger.Logger
-	cfg    *config.Config
+	agent    fantasy.Agent
+	logger   logger.Logger
+	cfg      *config.Config
+	strategy *CompressionStrategy
 }
 
 // NewLLMCompressor 创建 LLM 压缩器
-func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, cfg *config.Config, lg logger.Logger) (*LLMCompressor, error) {
+func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, strategy *CompressionStrategy, cfg *config.Config, lg logger.Logger, prt *prompt.Prompt) (*LLMCompressor, error) {
 
 	// 从全局配置读取模型配置
 	model := cfg.CompressorModel
@@ -50,17 +52,23 @@ func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, cfg *confi
 		temperature = 0.3
 	}
 
+	// 构造系统提示词
+	crpPrt := prt.CompressorSystemPrompt
+	crpPrt = prompt.InjectVariables(crpPrt, map[string]string{
+		"skill": strategy.Skill,
+	})
+
 	agent := fantasy.NewAgent(llm,
-		fantasy.WithSystemPrompt("You are a text compression assistant. Compress input according to the given schema, preserving key information while removing redundancy."),
+		fantasy.WithSystemPrompt(crpPrt),
 		fantasy.WithMaxOutputTokens(maxTokens),
 		fantasy.WithTemperature(temperature),
 	)
 
 	return &LLMCompressor{
-		agent:  agent,
-		logger: lg,
-		cfg: cfg,
-
+		agent:    agent,
+		logger:   lg,
+		cfg:      cfg,
+		strategy: strategy,
 	}, nil
 }
 
@@ -122,7 +130,7 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 				float64(len(compressed))/float64(len(raw)),
 				strategy.MaxCompressionRate,
 				strategy.MinCompressionRate,
-				c.buildRateAdjustmentPrompt(compressed, raw, strategy),
+				buildRateAdjustmentPrompt(compressed, raw, strategy),
 			)
 		}
 
@@ -189,7 +197,7 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 }
 
 // buildRateAdjustmentPrompt 根据压缩率情况构建调整提示
-func (c *LLMCompressor) buildRateAdjustmentPrompt(compressed string, raw string, strategy *CompressionStrategy) string {
+func buildRateAdjustmentPrompt(compressed string, raw string, strategy *CompressionStrategy) string {
 	compressionRate := float64(len(compressed)) / float64(len(raw))
 
 	if compressionRate > strategy.MaxCompressionRate {
@@ -201,7 +209,6 @@ func (c *LLMCompressor) buildRateAdjustmentPrompt(compressed string, raw string,
 }
 
 // MockCompressor 用于测试的模拟压缩器
-// TODO: Compressor 测试完成后删除
 type MockCompressor struct {
 	MaxOutputLength int
 }

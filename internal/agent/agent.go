@@ -1038,12 +1038,12 @@ func formatValue(v any) string {
 // InitContextManager 初始化上下文管理器
 // 启用 context manager 后，Agent 将使用 session 管理上下文而非简单的 history 切片
 func (a *Agent) InitContextManager(ctx context.Context, provider fantasy.Provider, archiveDir string) error {
-	// 创建压缩器
+	// 创建压缩器（仅用于L0）
 	var compressor ctxpkg.Compressor
 	var err error
 
-	// 使用全局配置创建压缩器
-	compressor, err = ctxpkg.NewLLMCompressor(ctx, provider, a.config, a.logger)
+	// 使用helper函数创建压缩器
+	compressor, err = ctxpkg.NewLLMCompressorWithProvider(ctx, provider, a.config, a.logger)
 	if err != nil {
 		a.logger.Warn("Failed to create LLM compressor, using mock", "error", err)
 		compressor = ctxpkg.NewMockCompressor(1024)
@@ -1051,9 +1051,10 @@ func (a *Agent) InitContextManager(ctx context.Context, provider fantasy.Provide
 
 	// 创建上下文管理器
 	mgr, err := ctxpkg.NewManager(&ctxpkg.ManagerConfig{
-		Compressor:   compressor,
-		ArchiveDir:   archiveDir,
+		Compressor:    compressor,
+		ArchiveDir:    archiveDir,
 		DefaultPrompt: "", // 使用 Agent 现有的 system prompt
+		Cfg:           a.config,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create context manager: %w", err)

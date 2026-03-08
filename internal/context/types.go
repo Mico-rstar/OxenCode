@@ -2,6 +2,8 @@ package context
 
 import (
 	"time"
+
+	"github.com/yourname/oxencode/pkg/config"
 )
 
 // PageType 页面类型，表示上下文层级
@@ -33,36 +35,83 @@ type CompressionStrategy struct {
 
 	// 超时配置
 	Timeout time.Duration `json:"timeout"` // 压缩超时时间
+
+	// 截断配置（从Config读取）
+	MaxToolOutputLength int `json:"max_tool_output_length"` // 工具输出最大长度，0表示不截断
+	MaxAssistantLength  int `json:"max_assistant_length"`   // Assistant消息最大长度，0表示不截断
 }
 
-// TODO: 用config来配置参数
-// DefaultCompressionStrategies 返回默认的压缩策略配置
+// NewCompressionStrategy 从Config创建指定PageType的压缩策略
+func NewCompressionStrategy(pageType PageType, cfg *config.Config) *CompressionStrategy {
+	switch pageType {
+	case PageTypeL1:
+		return &CompressionStrategy{
+			MaxCompressionRate:  0.5,
+			MinCompressionRate:  0.2,
+			Schema:              L1SchemaTemplate,
+			Timeout:             30 * time.Second,
+			MaxToolOutputLength: cfg.L1MaxToolOutputLength,
+			MaxAssistantLength:  cfg.L1MaxAssistantLength,
+		}
+	case PageTypeL0:
+		return &CompressionStrategy{
+			MaxCompressionRate:  0.3,
+			MinCompressionRate:  0.1,
+			Schema:              L0SchemaTemplate,
+			Timeout:             60 * time.Second,
+			MaxToolOutputLength: 0, // 不截断，LLM处理
+			MaxAssistantLength:  0,
+		}
+	case PageTypeL2:
+		return &CompressionStrategy{
+			MaxCompressionRate:  1.0,
+			MinCompressionRate:  1.0,
+			Schema:              "",
+			Timeout:             5 * time.Second,
+			MaxToolOutputLength: 0, // 不截断
+			MaxAssistantLength:  0,
+		}
+	}
+	return nil
+}
+
+// DefaultCompressionStrategies 返回默认的压缩策略配置（使用默认Config）
 func DefaultCompressionStrategies() (L0, L1, L2 *CompressionStrategy) {
-	// L1 策略：轻度压缩，保留较多细节
-	L1 = &CompressionStrategy{
-		MaxCompressionRate: 0.5, // 最多压缩到原来的 50%
-		MinCompressionRate: 0.2, // 最少压缩到原来的 20%
-		Schema:             L1SchemaTemplate,
-		Timeout:            30 * time.Second,
+	cfg := config.Get()
+	if cfg == nil {
+		// 如果没有配置，使用硬编码默认值
+		L1 = &CompressionStrategy{
+			MaxCompressionRate:  0.5,
+			MinCompressionRate:  0.2,
+			Schema:              L1SchemaTemplate,
+			Timeout:             30 * time.Second,
+			MaxToolOutputLength: 1000,
+			MaxAssistantLength:  2000,
+		}
+
+		L0 = &CompressionStrategy{
+			MaxCompressionRate:  0.3,
+			MinCompressionRate:  0.1,
+			Schema:              L0SchemaTemplate,
+			Timeout:             60 * time.Second,
+			MaxToolOutputLength: 0,
+			MaxAssistantLength:  0,
+		}
+
+		L2 = &CompressionStrategy{
+			MaxCompressionRate:  1.0,
+			MinCompressionRate:  1.0,
+			Schema:              "",
+			Timeout:             5 * time.Second,
+			MaxToolOutputLength: 0,
+			MaxAssistantLength:  0,
+		}
+		return L0, L1, L2
 	}
 
-	// L0 策略：高度压缩，保留关键信息
-	L0 = &CompressionStrategy{
-		MaxCompressionRate: 0.3, // 最多压缩到原来的 30%
-		MinCompressionRate: 0.1, // 最少压缩到原来的 10%
-		Schema:             L0SchemaTemplate,
-		Timeout:            60 * time.Second,
-	}
-
-	// L2 策略：不进行压缩，仅归档
-	L2 = &CompressionStrategy{
-		MaxCompressionRate: 1.0,
-		MinCompressionRate: 1.0,
-		Schema:             "",
-		Timeout:            5 * time.Second,
-	}
-
-	return L0, L1, L2
+	return NewCompressionStrategy(PageTypeL0, cfg),
+		NewCompressionStrategy(PageTypeL1, cfg),
+		NewCompressionStrategy(PageTypeL2, cfg)
 }
 
 // Schema templates

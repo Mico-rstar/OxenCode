@@ -6,24 +6,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/yourname/oxencode/internal/message"
 )
 
+// TruncatedMarker 截断标记
+const TruncatedMarker = "\n[...truncated]"
+
 // Page 维护一轮交互的所有 message
 type Page struct {
-	ID        PageID           `json:"id"`                // 页面唯一标识
-	Type      PageType         `json:"type"`              // 页面类型 (L0/L1/L2)
-	Strategy  *CompressionStrategy `json:"strategy"`      // 压缩策略配置
-	Content   string           `json:"content"`           // 根据 schema 压缩后的内容缓存
-	ArchivedFile string        `json:"archived_file"`     // 归档文件路径
-	CreatedAt time.Time        `json:"created_at"`        // 创建时间
-	UpdatedAt time.Time        `json:"updated_at"`        // 更新时间
+	ID           PageID              `json:"id"`                // 页面唯一标识
+	Type         PageType            `json:"type"`              // 页面类型 (L0/L1/L2)
+	Strategy     *CompressionStrategy `json:"strategy"`         // 压缩策略配置
+	Content      string              `json:"content"`           // 根据 schema 压缩后的内容缓存
+	ArchivedFile string              `json:"archived_file"`     // 归档文件路径
+	CreatedAt    time.Time           `json:"created_at"`        // 创建时间
+	UpdatedAt    time.Time           `json:"updated_at"`        // 更新时间
 
 	// 原始消息引用（L2 Pages 使用）
 	Messages []message.Message `json:"messages,omitempty"`
+
+	// 预处理后的消息（L1 使用）
+	ProcessedMessages []message.Message `json:"processed_messages,omitempty"`
 }
 
 // NewPage 创建新的 Page
@@ -80,12 +87,6 @@ func (p *Page) Compress(ctx context.Context, compressor Compressor) error {
 	return nil
 }
 
-// 仅供L0 L1 使用，L2 直接返回原始 messages
-// Render 渲染页面内容为 fantasy.Message 格式
-func (p *Page) Render() string {
-		return p.Content
-}
-
 // Archive 归档原始消息到文件系统
 func (p *Page) Archive(archiveDir string) (string, error) {
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
@@ -127,4 +128,91 @@ func (p *Page) GetTokenCount() int {
 // IsCompressed 返回页面是否已压缩
 func (p *Page) IsCompressed() bool {
 	return p.Content != "" && p.Type != PageTypeL2
+}
+
+// Preprocess 预处理消息，根据Strategy配置截断
+// L1级别会对工具输出和Assistant消息进行截断
+func (p *Page) Preprocess() {
+	if p.Strategy == nil {
+		return
+	}
+
+	processed := make([]message.Message, len(p.Messages))
+	for i, msg := range p.Messages {
+		processed[i] = p.truncateMessage(msg)
+	}
+	p.ProcessedMessages = processed
+	p.UpdatedAt = time.Now()
+}
+
+// truncateMessage 根据策略截断消息
+func (p *Page) truncateMessage(msg message.Message) message.Message {
+	result := msg // 复制消息
+
+	// 截断Assistant消息
+	if msg.Role == message.RoleAssistant && p.Strategy.MaxAssistantLength > 0 {
+		if len(msg.Content) > p.Strategy.MaxAssistantLength {
+			result.Content = msg.Content[:p.Strategy.MaxAssistantLength] + TruncatedMarker
+		}
+		// 截断工具输出
+		for j, step := range result.ReActLoop {
+			if step.ToolCall != nil && p.Strategy.MaxToolOutputLength > 0 {
+				if len(step.ToolCall.Output) > p.Strategy.MaxToolOutputLength {
+					result.ReActLoop[j].ToolCall.Output =
+						step.ToolCall.Output[:p.Strategy.MaxToolOutputLength] + TruncatedMarker
+				}
+			}
+		}
+	}
+
+	// 截断Tool消息
+	if msg.Role == message.RoleTool && p.Strategy.MaxToolOutputLength > 0 {
+		if len(msg.Content) > p.Strategy.MaxToolOutputLength {
+			result.Content = msg.Content[:p.Strategy.MaxToolOutputLength] + TruncatedMarker
+		}
+	}
+
+	return result
+}
+
+// Render 渲染页面内容为可读文本
+// L0使用压缩后的Content，L1/L2使用消息渲染（带角色标记）
+func (p *Page) Render() string {
+	// L0使用压缩后的Content
+	if p.Type == PageTypeL0 && p.Content != "" {
+		return p.Content
+	}
+
+	// L1/L2使用消息渲染
+	messages := p.Messages
+	if p.ProcessedMessages != nil {
+		messages = p.ProcessedMessages
+	}
+
+	var sb strings.Builder
+	for _, msg := range messages {
+		switch msg.Role {
+		case message.RoleUser:
+			sb.WriteString("[User]\n")
+			sb.WriteString(msg.Content)
+			sb.WriteString("\n\n")
+		case message.RoleAssistant:
+			sb.WriteString("[Assistant]\n")
+			sb.WriteString(msg.Content)
+			sb.WriteString("\n\n")
+			// 渲染工具调用
+			for _, step := range msg.ReActLoop {
+				if step.ToolCall != nil {
+					sb.WriteString(fmt.Sprintf("[Tool: %s]\n", step.ToolCall.Name))
+					sb.WriteString(step.ToolCall.Output)
+					sb.WriteString("\n\n")
+				}
+			}
+		case message.RoleTool:
+			sb.WriteString("[Tool Result]\n")
+			sb.WriteString(msg.Content)
+			sb.WriteString("\n\n")
+		}
+	}
+	return sb.String()
 }

@@ -2,11 +2,11 @@ package context
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/yourname/oxencode/internal/message"
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
 )
 
@@ -22,18 +22,19 @@ type Session struct {
 
 	// 配置
 	MaxL1Pages int `json:"max_l1_pages"` // L1 Page 最大数量
+	cfg        *config.Config `json:"-"` // 配置引用
 
 	// 压缩策略
 	L0Strategy *CompressionStrategy `json:"l0_strategy"`
 	L1Strategy *CompressionStrategy `json:"l1_strategy"`
 	L2Strategy *CompressionStrategy `json:"l2_strategy"`
 
-	// 异步压缩管理
+	// 异步压缩管理（仅用于L0）
 	compressor  Compressor   `json:"-"`  // 压缩器
 	compressWkr *CompressWorker `json:"-"` // 压缩工作器
 
 	// 归档目录
-	archiveDir string `json:"archive_dir"`
+	ArchiveDir string `json:"archive_dir"`
 
 	// 同步锁
 	mu sync.RWMutex `json:"-"`
@@ -51,6 +52,7 @@ type SessionConfig struct {
 	MaxL1Pages   int
 	ArchiveDir   string
 	Compressor   Compressor
+	Cfg          *config.Config // 配置引用
 }
 
 // DefaultSessionConfig 返回默认的 Session 配置
@@ -60,43 +62,58 @@ func DefaultSessionConfig() *SessionConfig {
 		MaxL1Pages:   10, // 默认保留 10 个 L1 pages
 		ArchiveDir:   "", // 使用默认归档目录
 		Compressor:   nil, // 需要外部设置
+		Cfg:          nil, // 需要外部设置
 	}
 }
 
 // NewSession 创建新的 Session
-func NewSession(config *SessionConfig) (*Session, error) {
+func NewSession(sessionConfig *SessionConfig) (*Session, error) {
 	log := logger.New("context/session")
 
-	if config.Compressor == nil {
+	if sessionConfig.Compressor == nil {
 		panic("Compressor is required, cannot create Session without it")
 	}
 
-	l0Strategy, l1Strategy, l2Strategy := DefaultCompressionStrategies()
+	cfg := sessionConfig.Cfg
+	if cfg == nil {
+		cfg = config.Get()
+	}
+
+	// 从Config创建策略
+	var l0Strategy, l1Strategy, l2Strategy *CompressionStrategy
+	if cfg != nil {
+		l0Strategy = NewCompressionStrategy(PageTypeL0, cfg)
+		l1Strategy = NewCompressionStrategy(PageTypeL1, cfg)
+		l2Strategy = NewCompressionStrategy(PageTypeL2, cfg)
+	} else {
+		l0Strategy, l1Strategy, l2Strategy = DefaultCompressionStrategies()
+	}
 
 	session := &Session{
 		ID:           time.Now().Format("20060102-150405"),
-		SystemPrompt: config.SystemPrompt,
+		SystemPrompt: sessionConfig.SystemPrompt,
 		L0Page:       nil, // 初始时没有 L0 page
 		L1Pages:      make([]*Page, 0),
 		L2Pages:      make([]*Page, 0),
-		MaxL1Pages:   config.MaxL1Pages,
+		MaxL1Pages:   sessionConfig.MaxL1Pages,
+		cfg:          cfg,
 		L0Strategy:   l0Strategy,
 		L1Strategy:   l1Strategy,
 		L2Strategy:   l2Strategy,
-		compressor:   config.Compressor,
-		archiveDir:   config.ArchiveDir,
+		compressor:   sessionConfig.Compressor,
+		ArchiveDir:   sessionConfig.ArchiveDir,
 		logger:       log,
 		initialized:  true,
 	}
 
 	// 设置默认归档目录
-	if session.archiveDir == "" {
-		session.archiveDir = "~/.local/share/oxencode/archive"
+	if session.ArchiveDir == "" {
+		session.ArchiveDir = "~/.local/share/oxencode/archive"
 	}
 
-	// 创建并启动压缩工作器
+	// 创建并启动压缩工作器（仅用于L0）
 	workerConfig := DefaultCompressWorkerConfig()
-	session.compressWkr = NewCompressWorker(config.Compressor, workerConfig)
+	session.compressWkr = NewCompressWorker(sessionConfig.Compressor, workerConfig)
 	go session.processCompressResults()
 
 	session.logger.Info("Session created", "id", session.ID, "max_l1_pages", session.MaxL1Pages)
@@ -117,11 +134,53 @@ func (s *Session) AddMessage(msg message.Message) {
 	currentL2 := s.L2Pages[0]
 	currentL2.AddMessage(msg)
 
+	// 检查是否超过token限制（兜底策略）
+	if s.cfg != nil && s.cfg.MaxPageTokens > 0 {
+		if currentL2.GetTokenCount() > s.cfg.MaxPageTokens {
+			s.splitL2PageLocked()
+		}
+	}
+
 	s.logger.Debug("Message added", "page_id", currentL2.ID, "role", msg.Role)
 }
 
-// Commit 提交当前 L2 page 进行压缩
-// 这会创建一个新的 L1 page 并开始收集新的 L2 messages
+// splitL2PageLocked 分页：旧消息→L1，新消息→L2（需要持有锁）
+func (s *Session) splitL2PageLocked() {
+	if len(s.L2Pages) == 0 {
+		return
+	}
+
+	currentL2 := s.L2Pages[0]
+	messages := currentL2.Messages
+
+	if len(messages) < 2 {
+		s.logger.Warn("Cannot split page with less than 2 messages")
+		return
+	}
+
+	// 按1/2分割
+	mid := len(messages) / 2
+	oldMessages := messages[:mid]
+	newMessages := messages[mid:]
+
+	// 旧消息创建L1 Page
+	l1Page := NewPage(PageTypeL1, s.L1Strategy)
+	l1Page.Messages = oldMessages
+	l1Page.Preprocess() // L1预处理（截断）
+	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
+
+	// 新消息保留为L2
+	newL2 := NewL2Page()
+	newL2.Messages = newMessages
+	s.L2Pages[0] = newL2
+
+	s.logger.Info("L2 page split due to token limit",
+		"old_messages", len(oldMessages),
+		"new_messages", len(newMessages))
+}
+
+// Commit 提交当前 L2 page，创建 L1 page 并预处理
+// L1不再调用LLM压缩，只进行截断预处理
 func (s *Session) Commit(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,7 +193,7 @@ func (s *Session) Commit(ctx context.Context) error {
 	currentL2 := s.L2Pages[0]
 
 	// 归档 L2 page
-	if _, err := currentL2.Archive(s.archiveDir); err != nil {
+	if _, err := currentL2.Archive(s.ArchiveDir); err != nil {
 		s.logger.Warn("Failed to archive L2 page", "error", err)
 	}
 
@@ -142,16 +201,11 @@ func (s *Session) Commit(ctx context.Context) error {
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
 	l1Page.Messages = currentL2.Messages
 
-	// 先添加到 L1Pages（未压缩状态）
-	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
+	// L1预处理（截断，不调用LLM）
+	l1Page.Preprocess()
 
-	// 将 L1 page 提交给压缩工作器
-	if s.compressWkr == nil {
-		panic("CompressWorker is nil, cannot submit compress task")
-	}
-	if err := s.compressWkr.Submit(l1Page, 0); err != nil {
-		return fmt.Errorf("failed to submit compress task: %w", err)
-	}
+	// 添加到 L1Pages
+	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
 
 	// 创建新的 L2 page 用于收集新消息
 	s.L2Pages = append([]*Page{NewL2Page()}, s.L2Pages...)

@@ -69,6 +69,13 @@ type Config struct {
 	CompressorMaxTokens   int64     `mapstructure:"compressor_max_tokens"`   // 压缩时最大输出 token 数
 	CompressorTemperature float64 `mapstructure:"compressor_temperature"`  // 压缩时温度参数
 	CompressorMaxRetries  int     `mapstructure:"compressor_max_retries"`  // ReAct 循环最大重试次数
+
+	// L1 预处理配置
+	L1MaxToolOutputLength int `mapstructure:"l1_max_tool_output_length"` // 工具输出最大长度，0表示不截断
+	L1MaxAssistantLength  int `mapstructure:"l1_max_assistant_length"`   // Assistant消息最大长度，0表示不截断
+
+	// Page 兜底配置
+	MaxPageTokens int `mapstructure:"max_page_tokens"` // 单Page最大token数，防止单任务上下文过长
 }
 
 var cfg *Config
@@ -123,6 +130,13 @@ func Load() (*Config, error) {
 	v.SetDefault("compressor_max_tokens", 4096)
 	v.SetDefault("compressor_temperature", 0.3)
 	v.SetDefault("compressor_max_retries", 3)
+
+	// L1 预处理默认配置
+	v.SetDefault("l1_max_tool_output_length", 1000)
+	v.SetDefault("l1_max_assistant_length", 2000)
+
+	// Page 兜底配置
+	v.SetDefault("max_page_tokens", 50000)
 
 	// 尝试读取用户配置文件
 	configExists := true

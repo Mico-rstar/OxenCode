@@ -19,24 +19,29 @@ func TestCompress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cprs, err := NewLLMCompressor(ctx, provider, &config.Config{
-		CompressorModel: "qwen3.5-plus",
-		CompressorMaxTokens: 4096,
-		CompressorTemperature: 0.7,
-	}, nil)	
-	if err != nil {
-		t.Fatal(err)
-	}
+
+	// 加载提示词
 	p := prompt.New("../../pkg/prompt/prompts")
 	if err := p.Load(); err != nil {
 		t.Fatal(err)
 	}
+
+	// 创建策略
 	strategy := &CompressionStrategy{
-		Schema: p.L0Schema,
-		MaxCompressionRate: 0.8,
-		MinCompressionRate: 0.5,
-		CompressionModel: "qwen3.5-plus",
-		Timeout: 30 * time.Second,
+		Schema:              p.L0Schema,
+		MaxCompressionRate:  0.8,
+		MinCompressionRate:  0.5,
+		CompressionModel:    "qwen3.5-plus",
+		Timeout:             30 * time.Second,
+	}
+
+	cprs, err := NewLLMCompressor(ctx, provider, strategy, &config.Config{
+		CompressorModel:       "qwen3.5-plus",
+		CompressorMaxTokens:   4096,
+		CompressorTemperature: 0.7,
+	}, nil, p)
+	if err != nil {
+		t.Fatal(err)
 	}
 	res, err := cprs.Compress(ctx, `user: 
 帮我在 prompts目录下写出这3个提示词模板，你应该首先通过 @docs/context-manage-idea.md 了解上下文系统设计思想

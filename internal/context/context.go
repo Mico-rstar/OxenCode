@@ -8,6 +8,7 @@ import (
 	"github.com/yourname/oxencode/internal/context/archive"
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/prompt"
 )
 
 // Manager 上下文管理器接口
@@ -45,9 +46,10 @@ type manager struct {
 
 // ManagerConfig Manager 配置
 type ManagerConfig struct {
-	Compressor   Compressor
-	ArchiveDir   string
+	Compressor    Compressor
+	ArchiveDir    string
 	DefaultPrompt string
+	Cfg           *config.Config
 }
 
 // NewManager 创建上下文管理器
@@ -154,15 +156,25 @@ func (m *manager) Close() {
 }
 
 // Helper: 创建 LLM 压缩器（需要传入 fantasy provider）
+// 注意：仅用于L0压缩，L1使用Preprocess而非LLM压缩
 func NewLLMCompressorWithProvider(ctx context.Context, provider fantasy.Provider, cfg *config.Config, log logger.Logger) (Compressor, error) {
-	return NewLLMCompressor(ctx, provider, cfg, log)
+	// 加载提示词
+	prt := prompt.New("")
+	if err := prt.Load(); err != nil {
+		return nil, fmt.Errorf("failed to load prompt: %w", err)
+	}
+
+	// 创建L0策略
+	l0Strategy := NewCompressionStrategy(PageTypeL0, cfg)
+
+	return NewLLMCompressor(ctx, provider, l0Strategy, cfg, log, prt)
 }
 
 // Helper: 创建默认管理器
 func NewDefaultManager(ctx context.Context, provider fantasy.Provider, archiveDir string, cfg *config.Config, log logger.Logger) (Manager, error) {
-	// 创建压缩器
+	// 创建压缩器（仅用于L0）
 	var compressor Compressor
-	llmCompressor, err := NewLLMCompressor(ctx, provider, cfg, log)
+	llmCompressor, err := NewLLMCompressorWithProvider(ctx, provider, cfg, log)
 	// TODO: 静默降级到 Mock 压缩器是一种 workaround，应该直接报错让调用方决定如何处理
 	if err != nil {
 		// 压缩器创建失败，使用 mock 压缩器
@@ -172,8 +184,9 @@ func NewDefaultManager(ctx context.Context, provider fantasy.Provider, archiveDi
 	}
 
 	return NewManager(&ManagerConfig{
-		Compressor:   compressor,
-		ArchiveDir:   archiveDir,
+		Compressor:    compressor,
+		ArchiveDir:    archiveDir,
 		DefaultPrompt: "You are a helpful AI programming assistant.",
+		Cfg:           cfg,
 	})
 }
