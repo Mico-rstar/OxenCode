@@ -55,10 +55,23 @@ func main() {
 	fmt.Printf("User: What tools do you have available?\n\n")
 
 	ctx := context.Background()
-	response, err := ag.ChatWithTools(ctx, "What tools do you have available? Please list them.")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Chat failed: %v\n", err)
-		os.Exit(1)
+
+	// 使用 ChatWithToolsWithProgress
+	progressCh := ag.ChatWithToolsWithProgress(ctx, "What tools do you have available? Please list them.")
+
+	var response string
+	for update := range progressCh {
+		switch update.Type {
+		case "action":
+			fmt.Printf("[Action] %s\n", update.Content)
+		case "observation":
+			fmt.Printf("[Observation] %s\n", update.Content)
+		case "error":
+			fmt.Fprintf(os.Stderr, "Error: %s\n", update.Content)
+			os.Exit(1)
+		case "done":
+			response = update.Content
+		}
 	}
 
 	fmt.Printf("Agent: %s\n", response)

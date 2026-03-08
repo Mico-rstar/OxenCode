@@ -211,96 +211,6 @@ func (m Model) handleSendMessage(msg SendMessage) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleStreamStart 处理流式开始
-func (m Model) handleStreamStart(msg StreamStartMsg) (tea.Model, tea.Cmd) {
-	// 创建流式 AI 消息
-	aiMsg := message.NewStreamingMessage(message.RoleAssistant)
-	aiMsg.ID = msg.MessageID
-	m.messages = append(m.messages, aiMsg)
-	m.currentMsgID = msg.MessageID
-	m.appState = StateStreaming
-
-	// 验证输入
-	if m.agent == nil {
-		m.appState = StateError
-		return m, StreamError(msg.MessageID, fmt.Errorf("agent not available"))
-	}
-
-	if msg.UserContent == "" {
-		m.appState = StateError
-		return m, StreamError(msg.MessageID, fmt.Errorf("user message is empty"))
-	}
-
-	// 启动 Agent 流式对话
-	streamCh, errCh := m.agent.ChatStream(m.ctx, msg.UserContent)
-
-	// 保存 channels 到 Model，以便后续继续监听
-	m.streamCh = streamCh
-	m.errCh = errCh
-
-	// 返回一个命令来处理流式响应
-	return m, m.waitForStreamData(msg.MessageID)
-}
-
-// handleStreamDelta 处理流式增量
-func (m Model) handleStreamDelta(msg StreamDeltaMsg) (tea.Model, tea.Cmd) {
-	for i := range m.messages {
-		if m.messages[i].ID == msg.MessageID {
-			m.messages[i].AppendContent(msg.Delta)
-			break
-		}
-	}
-
-	// 继续等待原来的流式数据（用于 ChatStream，不是 ChatWithToolsWithProgress）
-	return m, m.waitForStreamData(msg.MessageID)
-}
-
-// waitForStreamData 等待流式数据的辅助函数
-func (m Model) waitForStreamData(messageID string) tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case delta, ok := <-m.streamCh:
-			if !ok {
-				// 流结束
-				return StreamCompleteMsg{MessageID: messageID}
-			}
-			return StreamDeltaMsg{MessageID: messageID, Delta: delta}
-		case err := <-m.errCh:
-			if err != nil {
-				return StreamErrorMsg{MessageID: messageID, Error: err}
-			}
-			return StreamCompleteMsg{MessageID: messageID}
-		case <-m.ctx.Done():
-			// 上下文被取消
-			return StreamErrorMsg{MessageID: messageID, Error: fmt.Errorf("cancelled")}
-		}
-	}
-}
-
-// handleStreamComplete 处理流式完成
-func (m Model) handleStreamComplete(msg StreamCompleteMsg) (tea.Model, tea.Cmd) {
-	for i := range m.messages {
-		if m.messages[i].ID == msg.MessageID {
-			m.messages[i].Complete()
-			break
-		}
-	}
-	m.appState = StateIdle
-	return m, nil
-}
-
-// handleStreamError 处理流式错误
-func (m Model) handleStreamError(msg StreamErrorMsg) (tea.Model, tea.Cmd) {
-	for i := range m.messages {
-		if m.messages[i].ID == msg.MessageID {
-			m.messages[i].SetError(msg.Error)
-			break
-		}
-	}
-	m.appState = StateError
-	return m, nil
-}
-
 // handleChatWithToolsStart 处理 ChatWithTools 开始（使用 ReAct 循环）
 func (m Model) handleChatWithToolsStart(msg ChatWithToolsStartMsg) (tea.Model, tea.Cmd) {
 	// 创建 AI 消息用于跟踪整个 ReAct 循环
@@ -308,7 +218,7 @@ func (m Model) handleChatWithToolsStart(msg ChatWithToolsStartMsg) (tea.Model, t
 	aiMsg.ID = msg.MessageID
 	m.messages = append(m.messages, aiMsg)
 	m.currentMsgID = msg.MessageID
-	m.appState = StateStreaming
+	m.appState = StateThinking
 
 	// 验证输入
 	if m.agent == nil {

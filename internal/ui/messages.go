@@ -28,29 +28,6 @@ type ChatWithToolsCompleteMsg struct {
 	Error     error
 }
 
-// StreamStartMsg 开始流式输出的消息
-type StreamStartMsg struct {
-	MessageID    string
-	UserContent  string // 用户消息内容
-}
-
-// StreamDeltaMsg 流式输出增量消息
-type StreamDeltaMsg struct {
-	MessageID string
-	Delta     string
-}
-
-// StreamCompleteMsg 流式输出完成消息
-type StreamCompleteMsg struct {
-	MessageID string
-}
-
-// StreamErrorMsg 流式输出错误消息
-type StreamErrorMsg struct {
-	MessageID string
-	Error     error
-}
-
 // ReActStepMsg ReAct步骤消息
 type ReActStepMsg struct {
 	MessageID string
@@ -104,34 +81,6 @@ type AgentTickMsg struct{}
 func NewUserMessage(content string) tea.Cmd {
 	return func() tea.Msg {
 		return SendMessage{Content: content}
-	}
-}
-
-// StreamStart 返回流式开始消息命令
-func StreamStart(msgID string) tea.Cmd {
-	return func() tea.Msg {
-		return StreamStartMsg{MessageID: msgID}
-	}
-}
-
-// StreamDelta 返回流式增量消息命令
-func StreamDelta(msgID, delta string) tea.Cmd {
-	return func() tea.Msg {
-		return StreamDeltaMsg{MessageID: msgID, Delta: delta}
-	}
-}
-
-// StreamComplete 返回流式完成消息命令
-func StreamComplete(msgID string) tea.Cmd {
-	return func() tea.Msg {
-		return StreamCompleteMsg{MessageID: msgID}
-	}
-}
-
-// StreamError 返回流式错误消息命令
-func StreamError(msgID string, err error) tea.Cmd {
-	return func() tea.Msg {
-		return StreamErrorMsg{MessageID: msgID, Error: err}
 	}
 }
 

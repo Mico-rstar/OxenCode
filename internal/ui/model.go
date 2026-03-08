@@ -18,7 +18,6 @@ type AppState int
 const (
 	StateIdle AppState = iota
 	StateThinking
-	StateStreaming
 	StateExecutingTool
 	StateWaitingPermission
 	StateError
@@ -60,10 +59,6 @@ type Model struct {
 	currentMsgID string // 当前正在处理的消息ID
 	ctx          context.Context
 	cancelFunc   context.CancelFunc
-
-	// 流式响应 channels
-	streamCh     <-chan string
-	errCh        <-chan error
 
 	// Agent 异步操作 channel（用于当前正在进行的对话）
 	currentProgressCh <-chan agent.ProgressUpdate
@@ -199,18 +194,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ChatWithToolsCompleteMsg:
 		return m.handleChatWithToolsComplete(msg)
-
-	case StreamStartMsg:
-		return m.handleStreamStart(msg)
-
-	case StreamDeltaMsg:
-		return m.handleStreamDelta(msg)
-
-	case StreamCompleteMsg:
-		return m.handleStreamComplete(msg)
-
-	case StreamErrorMsg:
-		return m.handleStreamError(msg)
 
 	case ReActStepMsg:
 		return m.handleReActStep(msg)
