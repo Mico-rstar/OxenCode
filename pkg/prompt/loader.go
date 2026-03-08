@@ -60,7 +60,7 @@ func (p *Prompt) Load() error {
 		}
 
 		// 从文件加载内容
-		content, err := p.readFile(promptTag)
+		content, err := p.ReadFile(promptTag)
 		if err != nil {
 			return fmt.Errorf("failed to load %s: %w", promptTag, err)
 		}
@@ -80,7 +80,7 @@ func (p *Prompt) Load() error {
 }
 
 // readFile 从 prompts 目录读取文件内容，使用缓存
-func (p *Prompt) readFile(relativePath string) (string, error) {
+func (p *Prompt) ReadFile(relativePath string) (string, error) {
 	if content, ok := p.cache[relativePath]; ok {
 		return content, nil
 	}
@@ -112,7 +112,7 @@ func (p *Prompt) processIncludes(content string) (string, error) {
 			modulePath = strings.TrimSpace(modulePath)
 
 			// 读取模块内容
-			moduleContent, err := p.readFile(modulePath)
+			moduleContent, err := p.ReadFile(modulePath)
 			if err != nil {
 				return "", fmt.Errorf("failed to load module %s: %w", modulePath, err)
 			}
@@ -248,7 +248,7 @@ func (p *Prompt) LoadWithVars(vars map[string]string) error {
 		}
 
 		// 从文件加载内容
-		content, err := p.readFile(promptTag)
+		content, err := p.ReadFile(promptTag)
 		if err != nil {
 			return fmt.Errorf("failed to load %s: %w", promptTag, err)
 		}
