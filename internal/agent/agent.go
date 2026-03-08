@@ -31,15 +31,13 @@ type Agent struct {
 	reactLoop    *ReActLoop            // 自实现的 ReAct 循环
 	provider     fantasy.Provider      // fantasy Provider（多 Provider 支持）
 	model        fantasy.LanguageModel // fantasy LanguageModel
+	session      *ctxpkg.Session       // 上下文会话（直接持有）
 
 	// 通用字段
 	config       *config.Config
 	toolRegistry *tools.Registry     // 工具注册表
 	env          tools.Environment   // 执行环境
 	logger       logger.Logger       // 日志记录器
-
-	// Context Manager - 统一管理 Session 生命周期
-	ctxManager ctxpkg.Manager
 
 	// 快照管理器（用于调试和监控）
 	snapshotManager *SnapshotManager
@@ -115,27 +113,23 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	// 加载系统提示词
 	systemPrompt := loadSystemPrompt(cfg, log)
 
-	// 创建 Context Manager（统一管理 Session 生命周期）
-	ctxManager, err := ctxpkg.NewDefaultManager(context.Background(), provider, "", cfg, log)
+	// 创建压缩器（仅用于L0）
+	var compressor ctxpkg.Compressor
+	compressor, err = ctxpkg.NewLLMCompressorWithProvider(context.Background(), provider, cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create context manager: %w", err)
+		log.Warn("Failed to create LLM compressor, using mock", "error", err)
+		compressor = ctxpkg.NewMockCompressor(1024)
 	}
 
-	// 通过 Manager 创建初始 Session
-	session, err := ctxManager.NewSession(&ctxpkg.SessionConfig{
+	// 直接创建 Session
+	session, err := ctxpkg.NewSession(&ctxpkg.SessionConfig{
 		SystemPrompt: systemPrompt,
 		MaxL1Pages:   10,
+		Compressor:   compressor,
 		Cfg:          cfg,
 	})
 	if err != nil {
-		ctxManager.Close()
-		return nil, fmt.Errorf("failed to create initial session: %w", err)
-	}
-
-	// 设置为当前 session
-	if err := ctxManager.SetCurrentSession(session.ID); err != nil {
-		ctxManager.Close()
-		return nil, fmt.Errorf("failed to set current session: %w", err)
+		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
 	// 创建 ReActLoop
@@ -155,7 +149,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		reactLoop:    reactLoop,
 		provider:     provider,
 		model:        model,
-		ctxManager:   ctxManager,
+		session:      session,
 		config:       cfg,
 		toolRegistry: registry,
 		env:          env,
@@ -287,31 +281,19 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 	}
 }
 
-// getCurrentSession 获取当前 Session（通过 Manager）
-func (a *Agent) getCurrentSession() *ctxpkg.Session {
-	if a.ctxManager == nil {
-		return nil
-	}
-	return a.ctxManager.GetCurrentSession()
-}
-
 // ClearHistory 清空对话历史（创建新 Session）
 func (a *Agent) ClearHistory() {
-	if a.ctxManager == nil {
-		return
-	}
+	// 复用当前 session 的 system prompt
+	systemPrompt := a.session.SystemPrompt
 
-	// 获取当前 session 以复用 system prompt
-	current := a.getCurrentSession()
-	var systemPrompt string
-	if current != nil {
-		systemPrompt = current.SystemPrompt
-	}
+	// 关闭旧 session
+	a.session.Close()
 
 	// 创建新 session
-	session, err := a.ctxManager.NewSession(&ctxpkg.SessionConfig{
+	session, err := ctxpkg.NewSession(&ctxpkg.SessionConfig{
 		SystemPrompt: systemPrompt,
 		MaxL1Pages:   10,
+		Compressor:   ctxpkg.NewMockCompressor(1024), // 使用 mock 压缩器
 		Cfg:          a.config,
 	})
 	if err != nil {
@@ -319,12 +301,8 @@ func (a *Agent) ClearHistory() {
 		return
 	}
 
-	// 切换到新 session
-	if err := a.ctxManager.SetCurrentSession(session.ID); err != nil {
-		a.logger.Error("Failed to switch to new session", "error", err)
-	}
-
-	// 更新 ReActLoop 的 session 引用
+	// 更新 Agent 和 ReActLoop 的 session 引用
+	a.session = session
 	a.reactLoop.SetSession(session)
 	a.logger.Info("History cleared, new session created", "session_id", session.ID)
 }
@@ -406,132 +384,55 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 // CommitSession 提交当前 session 进行压缩
 // 应该在每轮交互完成后调用
 func (a *Agent) CommitSession(ctx context.Context) error {
-	session := a.getCurrentSession()
-	if session == nil {
+	if a.session == nil {
 		return nil
 	}
-	return session.Commit(ctx)
+	return a.session.Commit(ctx)
 }
 
 // AddMessageToSession 添加消息到 session
 func (a *Agent) AddMessageToSession(msg message.Message) {
-	session := a.getCurrentSession()
-	if session == nil {
+	if a.session == nil {
 		return
 	}
-	session.AddMessage(msg)
+	a.session.AddMessage(msg)
 }
 
 // GetContextMessages 获取上下文消息
 // 返回 session 构建的上下文
 func (a *Agent) GetContextMessages() []message.Message {
-	session := a.getCurrentSession()
-	if session == nil {
+	if a.session == nil {
 		return []message.Message{}
 	}
-	return session.GetContext()
+	return a.session.GetContext()
 }
 
 // GetSessionStats 获取 session 统计信息
 func (a *Agent) GetSessionStats() ctxpkg.SessionStats {
-	session := a.getCurrentSession()
-	if session == nil {
+	if a.session == nil {
 		return ctxpkg.SessionStats{}
 	}
-	return session.GetStats()
-}
-
-// NewSession 创建新 session 并切换到它
-func (a *Agent) NewSession(systemPrompt string) (*ctxpkg.Session, error) {
-	if a.ctxManager == nil {
-		return nil, fmt.Errorf("context manager not initialized")
-	}
-
-	session, err := a.ctxManager.NewSession(&ctxpkg.SessionConfig{
-		SystemPrompt: systemPrompt,
-		MaxL1Pages:   10,
-		Cfg:          a.config,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// 切换到新 session
-	if err := a.ctxManager.SetCurrentSession(session.ID); err != nil {
-		return nil, err
-	}
-
-	// 更新 ReActLoop 的 session 引用
-	a.reactLoop.SetSession(session)
-
-	a.logger.Info("New session created", "session_id", session.ID)
-	return session, nil
-}
-
-// SwitchSession 切换到指定 session
-func (a *Agent) SwitchSession(sessionID string) error {
-	if a.ctxManager == nil {
-		return fmt.Errorf("context manager not initialized")
-	}
-
-	if err := a.ctxManager.SetCurrentSession(sessionID); err != nil {
-		return err
-	}
-
-	// 更新 ReActLoop 的 session 引用
-	session := a.getCurrentSession()
-	if session != nil {
-		a.reactLoop.SetSession(session)
-	}
-
-	a.logger.Info("Session switched", "session_id", sessionID)
-	return nil
-}
-
-// CloseSession 关闭指定 session
-func (a *Agent) CloseSession(sessionID string) error {
-	if a.ctxManager == nil {
-		return fmt.Errorf("context manager not initialized")
-	}
-	return a.ctxManager.CloseSession(sessionID)
-}
-
-// ListSessions 列出所有 session IDs
-func (a *Agent) ListSessions() []string {
-	if a.ctxManager == nil {
-		return []string{}
-	}
-	return a.ctxManager.ListSessions()
+	return a.session.GetStats()
 }
 
 // GetCurrentSessionID 获取当前 session ID
 func (a *Agent) GetCurrentSessionID() string {
-	session := a.getCurrentSession()
-	if session == nil {
+	if a.session == nil {
 		return ""
 	}
-	return session.ID
-}
-
-// GetSession 获取指定 ID 的 session
-func (a *Agent) GetSession(sessionID string) (*ctxpkg.Session, error) {
-	if a.ctxManager == nil {
-		return nil, fmt.Errorf("context manager not initialized")
-	}
-	return a.ctxManager.GetSession(sessionID)
+	return a.session.ID
 }
 
 // Close 关闭 Agent，释放资源
 func (a *Agent) Close() {
-	if a.ctxManager != nil {
-		a.ctxManager.Close()
+	if a.session != nil {
+		a.session.Close()
 	}
 	a.logger.Info("Agent closed")
 }
 
 // SearchArchive 搜索归档消息
 func (a *Agent) SearchArchive(query string, limit int) ([]ctxarchive.ArchiveEntry, error) {
-	// 这里可以扩展为通过 context.Manager 访问 archive.Manager
 	// 简化版本返回空结果
 	return []ctxarchive.ArchiveEntry{}, nil
 }
