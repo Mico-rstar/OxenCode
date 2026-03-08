@@ -215,7 +215,11 @@ func (a *Agent) TakeSnapshot(event string) error {
 	if a.snapshotManager == nil {
 		return nil
 	}
-	return a.snapshotManager.TakeSnapshot(a.session, event)
+	session := a.getCurrentSession()
+	if session == nil {
+		return nil
+	}
+	return a.snapshotManager.TakeSnapshot(session, event)
 }
 
 // EnableSnapshot 启用快照功能
@@ -241,9 +245,13 @@ func (a *Agent) SnapshotOnMessage(msg message.Message) {
 	if a.snapshotManager == nil {
 		return
 	}
+	session := a.getCurrentSession()
+	if session == nil {
+		return
+	}
 
 	event := fmt.Sprintf("msg_%s", msg.Role)
-	a.snapshotManager.TakeSnapshot(a.session, event)
+	a.snapshotManager.TakeSnapshot(session, event)
 }
 
 // SnapshotOnToolCall 工具调用时的快照钩子
@@ -251,9 +259,13 @@ func (a *Agent) SnapshotOnToolCall(toolName string) {
 	if a.snapshotManager == nil {
 		return
 	}
+	session := a.getCurrentSession()
+	if session == nil {
+		return
+	}
 
 	event := fmt.Sprintf("tool_%s", toolName)
-	a.snapshotManager.TakeSnapshot(a.session, event)
+	a.snapshotManager.TakeSnapshot(session, event)
 }
 
 // SnapshotOnCommit 提交时的快照钩子
@@ -261,8 +273,12 @@ func (a *Agent) SnapshotOnCommit() {
 	if a.snapshotManager == nil {
 		return
 	}
+	session := a.getCurrentSession()
+	if session == nil {
+		return
+	}
 
-	a.snapshotManager.TakeSnapshot(a.session, "commit")
+	a.snapshotManager.TakeSnapshot(session, "commit")
 }
 
 // SnapshotOnSplit 分页时的快照钩子
@@ -270,6 +286,10 @@ func (a *Agent) SnapshotOnSplit() {
 	if a.snapshotManager == nil {
 		return
 	}
+	session := a.getCurrentSession()
+	if session == nil {
+		return
+	}
 
-	a.snapshotManager.TakeSnapshot(a.session, "split")
+	a.snapshotManager.TakeSnapshot(session, "split")
 }

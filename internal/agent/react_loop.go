@@ -90,6 +90,13 @@ func (r *ReActLoop) SetCallbacks(cb *Callbacks) {
 	}
 }
 
+// SetSession 更新 Session 引用（用于切换 session 时）
+func (r *ReActLoop) SetSession(session *ctxpkg.Session) {
+	r.session = session
+	// 同时更新 MessageBuilder 的 session 引用
+	r.builder = NewMessageBuilder(session, r.cfg, r.logger)
+}
+
 // snapshot 拍摄快照
 func (r *ReActLoop) snapshot(event string) {
 	if r.callbacks != nil && r.callbacks.OnSnapshot != nil {
