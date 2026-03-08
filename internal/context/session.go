@@ -217,8 +217,8 @@ func (s *Session) Commit(ctx context.Context) error {
 		s.compressL0Locked()
 	}
 
-	// 创建新的 L2 page 用于收集新消息
-	s.L2Pages = append([]*Page{NewL2Page()}, s.L2Pages...)
+	// 替换当前的 L2 page 为新的空 page
+	s.L2Pages[0] = NewL2Page()
 
 	s.logger.Info("Session committed", "l2_page_id", currentL2.ID, "l1_page_id", l1Page.ID)
 	return nil
@@ -242,14 +242,18 @@ func (s *Session) GetContext() []message.Message {
 		messages = append(messages, message.NewMessage(message.RoleSystem, s.L0Page.Render()))
 	}
 
-	// 3. 添加 L1 pages
-	for _, p := range s.L1Pages {
+	// 3. 添加 L1 pages（按时间正序：从最旧到最新）
+	// L1Pages 是倒序存储（最新在前），需要反向遍历
+	for i := len(s.L1Pages) - 1; i >= 0; i-- {
+		p := s.L1Pages[i]
 		content := p.Render()
 		messages = append(messages, message.NewMessage(message.RoleAssistant, content))
 	}
 
-	// 4. 添加 L2 pages（原始消息）
-	for _, p := range s.L2Pages {
+	// 4. 添加 L2 pages（按时间正序：从最旧到最新）
+	// L2Pages 也是倒序存储（最新在前），需要反向遍历
+	for i := len(s.L2Pages) - 1; i >= 0; i-- {
+		p := s.L2Pages[i]
 		messages = append(messages, p.Messages...)
 	}
 
@@ -374,4 +378,82 @@ func (s *Session) Close() {
 		s.compressWkr.Stop()
 	}
 	s.logger.Info("Session closed", "id", s.ID)
+}
+
+// CheckAndSplit 检查并触发分页
+// 当 L2 Page 超过阈值时自动分割
+func (s *Session) CheckAndSplit() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.L2Pages) == 0 {
+		return
+	}
+
+	currentL2 := s.L2Pages[0]
+	if s.cfg != nil && s.cfg.MaxPageTokens > 0 {
+		if currentL2.GetTokenCount() > s.cfg.MaxPageTokens {
+			s.splitL2PageLocked()
+			s.logger.Info("L2 page auto-split due to token limit",
+				"tokens", currentL2.GetTokenCount(),
+				"threshold", s.cfg.MaxPageTokens)
+		}
+	}
+}
+
+// GetTotalTokenCount 获取当前总 token 数
+func (s *Session) GetTotalTokenCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.calculateTotalTokensLocked()
+}
+
+// calculateTotalTokensLocked 计算总 token 数（需要持有锁）
+func (s *Session) calculateTotalTokensLocked() int {
+	total := 0
+	if s.L0Page != nil {
+		total += s.L0Page.GetTokenCount()
+	}
+	for _, p := range s.L1Pages {
+		total += p.GetTokenCount()
+	}
+	for _, p := range s.L2Pages {
+		total += p.GetTokenCount()
+	}
+	return total
+}
+
+// ForceCommit 强制提交当前 L2（用于紧急分页）
+func (s *Session) ForceCommit(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.L2Pages) == 0 || len(s.L2Pages[0].Messages) == 0 {
+		return nil
+	}
+
+	// 归档
+	currentL2 := s.L2Pages[0]
+	if _, err := currentL2.Archive(s.ArchiveDir); err != nil {
+		s.logger.Warn("Failed to archive L2 page", "error", err)
+	}
+
+	// 创建 L1
+	l1Page := NewPage(PageTypeL1, s.L1Strategy)
+	l1Page.Messages = currentL2.Messages
+	l1Page.Preprocess()
+
+	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
+
+	// 检查 L0 压缩
+	if len(s.L1Pages) > s.MaxL1Pages {
+		s.compressL0Locked()
+	}
+
+	// 新 L2
+	s.L2Pages[0] = NewL2Page()
+
+	s.logger.Info("Session force committed")
+	return nil
 }

@@ -72,6 +72,14 @@ func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, strategy *
 	}, nil
 }
 
+// getLogger 获取 logger，如果为 nil 则返回 nop logger
+func (c *LLMCompressor) getLogger() logger.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return logger.NewNop()
+}
+
 // Compress 实现 Compressor 接口，带有 ReAct 循环和超时控制
 func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *CompressionStrategy) (string, error) {
 	// 超时控制
@@ -140,14 +148,14 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 		})
 
 		if err != nil {
-			c.logger.Error("LLM compression failed", "error", err, "iteration", iteration)
+			c.getLogger().Error("LLM compression failed", "error", err, "iteration", iteration)
 			lastError = err
 			continue
 		}
 
 		// 提取响应内容
 		if result == nil || len(result.Response.Content) == 0 {
-			c.logger.Error("Empty compression result", "iteration", iteration)
+			c.getLogger().Error("Empty compression result", "iteration", iteration)
 			lastError = fmt.Errorf("empty compression result")
 			continue
 		}
@@ -161,7 +169,7 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 
 		// 验证压缩率
 		compressionRate := float64(len(compressed)) / float64(len(raw))
-		c.logger.Debug("Compression attempt complete",
+		c.getLogger().Debug("Compression attempt complete",
 			"iteration", iteration,
 			"raw_length", len(raw),
 			"compressed_length", len(compressed),
@@ -172,16 +180,16 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 
 		// 检查压缩率是否在允许范围内
 		if compressionRate <= strategy.MaxCompressionRate && compressionRate >= strategy.MinCompressionRate {
-			c.logger.Info("Compression rate within acceptable range", "rate", compressionRate)
+			c.getLogger().Info("Compression rate within acceptable range", "rate", compressionRate)
 			return compressed, nil
 		}
 
 		// 压缩率不符合要求，继续重试
 		if compressionRate > strategy.MaxCompressionRate {
-			c.logger.Warn("Compression rate exceeded maximum, will retry",
+			c.getLogger().Warn("Compression rate exceeded maximum, will retry",
 				"rate", compressionRate, "max", strategy.MaxCompressionRate)
 		} else {
-			c.logger.Warn("Compression rate below minimum, will retry",
+			c.getLogger().Warn("Compression rate below minimum, will retry",
 				"rate", compressionRate, "min", strategy.MinCompressionRate)
 		}
 	}
@@ -191,7 +199,7 @@ func (c *LLMCompressor) Compress(ctx context.Context, raw string, strategy *Comp
 		return "", fmt.Errorf("compression failed after %d attempts: %w", c.cfg.CompressorMaxRetries, lastError)
 	}
 
-	c.logger.Warn("Compression completed but rate constraints not met, returning best effort",
+	c.getLogger().Warn("Compression completed but rate constraints not met, returning best effort",
 		"final_rate", float64(len(compressed))/float64(len(raw)))
 	return compressed, nil
 }

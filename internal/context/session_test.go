@@ -167,18 +167,20 @@ func TestSession_Commit(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Should have 1 L1 page and 2 L2 pages (new empty one at [0], old one at [1])
+		// Should have 1 L1 page and 1 L2 page (new empty one)
+		// L2 内容被移动到 L1，L2 被替换为新的空 page
 		if len(session.L1Pages) != 1 {
 			t.Errorf("expected 1 L1 page, got %d", len(session.L1Pages))
 		}
-		if len(session.L2Pages) != 2 {
-			t.Errorf("expected 2 L2 pages (new + old), got %d", len(session.L2Pages))
+		if len(session.L2Pages) != 1 {
+			t.Errorf("expected 1 L2 page, got %d", len(session.L2Pages))
 		}
 		if len(session.L2Pages[0].Messages) != 0 {
-			t.Errorf("expected new L2 page at [0] to be empty, got %d messages", len(session.L2Pages[0].Messages))
+			t.Errorf("expected new L2 page to be empty, got %d messages", len(session.L2Pages[0].Messages))
 		}
-		if len(session.L2Pages[1].Messages) != 1 {
-			t.Errorf("expected old L2 page at [1] to have 1 message, got %d messages", len(session.L2Pages[1].Messages))
+		// L1 page should contain the old L2 message
+		if len(session.L1Pages[0].Messages) != 1 {
+			t.Errorf("expected L1 page to have 1 message, got %d messages", len(session.L1Pages[0].Messages))
 		}
 	})
 
@@ -449,4 +451,123 @@ func TestSession_Concurrency(t *testing.T) {
 	<-done
 
 	// Should not panic or deadlock
+}
+
+// TestSession_GetContext_FIFOOrder 测试消息按 FIFO 顺序返回
+func TestSession_GetContext_FIFOOrder(t *testing.T) {
+	config := DefaultSessionConfig()
+	config.SystemPrompt = "Test system prompt"
+	config.Compressor = NewMockCompressor(1000)
+	config.MaxL1Pages = 5
+
+	session, err := NewSession(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer session.Close()
+
+	// 添加第一批消息并提交到 L1
+	session.AddMessage(message.NewMessage(message.RoleUser, "L2-Msg1-User"))
+	session.AddMessage(message.NewMessage(message.RoleAssistant, "L2-Msg1-Assistant"))
+	if err := session.Commit(context.Background()); err != nil {
+		t.Fatalf("commit 1 failed: %v", err)
+	}
+
+	// 添加第二批消息并提交到 L1
+	session.AddMessage(message.NewMessage(message.RoleUser, "L2-Msg2-User"))
+	session.AddMessage(message.NewMessage(message.RoleAssistant, "L2-Msg2-Assistant"))
+	if err := session.Commit(context.Background()); err != nil {
+		t.Fatalf("commit 2 failed: %v", err)
+	}
+
+	// 添加第三批消息（仍在 L2）
+	session.AddMessage(message.NewMessage(message.RoleUser, "L2-Msg3-User"))
+	session.AddMessage(message.NewMessage(message.RoleAssistant, "L2-Msg3-Assistant"))
+
+	ctx := session.GetContext()
+
+	// 预期顺序：System -> L1(旧) -> L1(新) -> L2(当前)
+	// 验证消息数量
+	if len(ctx) < 5 {
+		t.Errorf("expected at least 5 messages, got %d", len(ctx))
+		for i, msg := range ctx {
+			t.Logf("ctx[%d]: role=%s, content=%q", i, msg.Role, msg.Content)
+		}
+	}
+
+	// 验证系统消息
+	if ctx[0].Role != message.RoleSystem {
+		t.Errorf("expected system message at index 0, got %s", ctx[0].Role)
+	}
+
+	// 验证 L1 消息顺序（第一个 L1 应该在第二个 L1 之前）
+	// 由于 L1 渲染内容，我们检查内容是否包含预期的消息
+	l1Msgs := []string{}
+	for _, msg := range ctx {
+		if msg.Role == message.RoleAssistant && len(msg.Content) > 0 {
+			// 检查是否是 L1 page 的内容（包含 "L2-Msg" 的消息）
+			if containsAny(msg.Content, []string{"L2-Msg1", "L2-Msg2"}) {
+				l1Msgs = append(l1Msgs, msg.Content)
+			}
+		}
+	}
+
+	// 验证 L1 消息按 FIFO 顺序（Msg1 应该在 Msg2 之前）
+	if len(l1Msgs) >= 2 {
+		idx1 := findIndex(l1Msgs[0], "L2-Msg1")
+		idx2 := findIndex(l1Msgs[1], "L2-Msg2")
+		if idx1 > idx2 {
+			t.Error("L1 messages are not in FIFO order")
+		}
+	}
+
+	// 验证 L2 消息顺序
+	l2StartIdx := len(ctx) - 2 // 最后两条应该是 L2 消息
+	if l2StartIdx >= 0 && l2StartIdx < len(ctx) {
+		if ctx[l2StartIdx].Content != "L2-Msg3-User" {
+			t.Errorf("expected L2-Msg3-User at index %d, got %q", l2StartIdx, ctx[l2StartIdx].Content)
+		}
+		if ctx[l2StartIdx+1].Content != "L2-Msg3-Assistant" {
+			t.Errorf("expected L2-Msg3-Assistant at index %d, got %q", l2StartIdx+1, ctx[l2StartIdx+1].Content)
+		}
+	}
+
+	t.Logf("Total messages: %d", len(ctx))
+	for i, msg := range ctx {
+		t.Logf("ctx[%d]: role=%s, content_preview=%q", i, msg.Role, truncate(msg.Content, 50))
+	}
+}
+
+func containsAny(s string, substrs []string) bool {
+	for _, substr := range substrs {
+		if len(s) >= len(substr) && containsSubstring(s, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func findIndex(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

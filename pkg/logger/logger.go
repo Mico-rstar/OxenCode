@@ -120,3 +120,8 @@ func (n *noopLogger) Fatal(msg string, args ...interface{})                     
 func (n *noopLogger) Named(name string) Logger                                                { return n }
 func (n *noopLogger) With(args ...interface{}) Logger                                         { return n }
 func (n *noopLogger) Sync() error                                                              { return nil }
+
+// NewNop 创建一个 no-op logger，用于测试或不需要日志的场景
+func NewNop() Logger {
+	return &noopLogger{}
+}
