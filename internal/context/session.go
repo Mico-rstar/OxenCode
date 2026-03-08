@@ -169,6 +169,11 @@ func (s *Session) splitL2PageLocked() {
 	l1Page.Preprocess() // L1预处理（截断）
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
 
+	// 检查是否需要压缩 L0
+	if len(s.L1Pages) > s.MaxL1Pages {
+		s.compressL0Locked()
+	}
+
 	// 新消息保留为L2
 	newL2 := NewL2Page()
 	newL2.Messages = newMessages
@@ -206,6 +211,11 @@ func (s *Session) Commit(ctx context.Context) error {
 
 	// 添加到 L1Pages
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
+
+	// 检查是否需要压缩 L0
+	if len(s.L1Pages) > s.MaxL1Pages {
+		s.compressL0Locked()
+	}
 
 	// 创建新的 L2 page 用于收集新消息
 	s.L2Pages = append([]*Page{NewL2Page()}, s.L2Pages...)
@@ -292,13 +302,13 @@ func (s *Session) compressL0Locked() {
 	n := len(s.L1Pages) - s.MaxL1Pages
 	oldL1Pages := s.L1Pages[len(s.L1Pages)-n:]
 
-	// 合并内容
+	// 合并内容（使用 Render() 而非 Content，因为 L1 现在使用预处理消息）
 	var mergedContent string
 	if s.L0Page != nil {
 		mergedContent = s.L0Page.Content + "\n\n"
 	}
 	for _, p := range oldL1Pages {
-		mergedContent += p.Content + "\n\n"
+		mergedContent += p.Render() + "\n\n"
 	}
 
 	// 创建新的 L0 page

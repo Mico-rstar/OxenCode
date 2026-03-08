@@ -149,18 +149,19 @@ func (p *Page) Preprocess() {
 func (p *Page) truncateMessage(msg message.Message) message.Message {
 	result := msg // 复制消息
 
-	// 截断Assistant消息
+	// 截断Assistant消息内容
 	if msg.Role == message.RoleAssistant && p.Strategy.MaxAssistantLength > 0 {
 		if len(msg.Content) > p.Strategy.MaxAssistantLength {
 			result.Content = msg.Content[:p.Strategy.MaxAssistantLength] + TruncatedMarker
 		}
-		// 截断工具输出
+	}
+
+	// 截断工具输出（Assistant消息的ReActLoop中）
+	if msg.Role == message.RoleAssistant && p.Strategy.MaxToolOutputLength > 0 {
 		for j, step := range result.ReActLoop {
-			if step.ToolCall != nil && p.Strategy.MaxToolOutputLength > 0 {
-				if len(step.ToolCall.Output) > p.Strategy.MaxToolOutputLength {
-					result.ReActLoop[j].ToolCall.Output =
-						step.ToolCall.Output[:p.Strategy.MaxToolOutputLength] + TruncatedMarker
-				}
+			if step.ToolCall != nil && len(step.ToolCall.Output) > p.Strategy.MaxToolOutputLength {
+				result.ReActLoop[j].ToolCall.Output =
+					step.ToolCall.Output[:p.Strategy.MaxToolOutputLength] + TruncatedMarker
 			}
 		}
 	}
