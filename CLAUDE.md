@@ -117,3 +117,7 @@ These principles are **NON-NEGOTIABLE**. Violating any of these will result in u
    - Do NOT reinvent the wheel unless explicitly directed to do so
   
 6. **ASK human for more context when anything not sure**
+
+7. **Never use mocks as a fallback strategy.**
+   - mock is a kind of workaround, it will delay the real errors to the production environment
+   - panic > mock
