@@ -39,6 +39,8 @@ api_key = "sk-8440a58764c846c88183bfec2d94d279"
 # model = "qwen-max"
 model = "qwen3.5-plus"
 
+compressor_model = "qwen3.5-plus"
+
 # DeepSeek 模型示例
 # model = "deepseek-chat"
 # model = "deepseek-coder"

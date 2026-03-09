@@ -77,6 +77,15 @@ type Config struct {
 	// Page 兜底配置
 	MaxPageTokens int `mapstructure:"max_page_tokens"` // 单Page最大token数，防止单任务上下文过长
 
+	// 上下文管理配置（百分比阈值）
+	MaxContextTokens int     `mapstructure:"max_context_tokens"`     // 总上下文硬上限（绝对token值）
+	HardMaxL0Percent float64 `mapstructure:"hard_max_l0_percent"`    // L0硬上限百分比，默认0.1
+	HardMaxL1Percent float64 `mapstructure:"hard_max_l1_percent"`    // L1硬上限百分比，默认0.6
+	SoftMaxL1Ratio   float64 `mapstructure:"soft_max_l1_ratio"`      // L1软上限相对硬上限比例，默认0.6
+	HardMaxL2Percent float64 `mapstructure:"hard_max_l2_percent"`    // L2硬上限百分比，默认0.3
+	SoftMaxL2Ratio   float64 `mapstructure:"soft_max_l2_ratio"`      // L2软上限相对硬上限比例，默认0.7
+	CompressTimeout  int     `mapstructure:"compress_timeout"`       // 压缩超时时间（秒），默认60
+
 	// ReAct 循环配置
 	MaxReActIterations  int `mapstructure:"max_react_iterations"`   // ReAct 循环最大迭代次数
 	ToolOutputMaxLength int `mapstructure:"tool_output_max_length"` // 工具输出最大长度，0表示使用默认值
@@ -140,7 +149,16 @@ func Load() (*Config, error) {
 	v.SetDefault("l1_max_assistant_length", 2000)
 
 	// Page 兜底配置
-	v.SetDefault("max_page_tokens", 50000)
+	v.SetDefault("max_page_tokens", 10000)
+
+	// 上下文管理配置（百分比阈值）
+	v.SetDefault("max_context_tokens", 50000)    // 默认总上下文上限 150k
+	v.SetDefault("hard_max_l0_percent", 0.1)      // L0 占 10%
+	v.SetDefault("hard_max_l1_percent", 0.6)      // L1 占 60%
+	v.SetDefault("soft_max_l1_ratio", 0.6)        // L1 软上限为硬上限的 60%
+	v.SetDefault("hard_max_l2_percent", 0.3)      // L2 占 30%
+	v.SetDefault("soft_max_l2_ratio", 0.7)        // L2 软上限为硬上限的 70%
+	v.SetDefault("compress_timeout", 30)          // 压缩超时 60 秒
 
 	// 尝试读取用户配置文件
 	configExists := true
