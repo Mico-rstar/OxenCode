@@ -15,22 +15,30 @@ type Session struct {
 	ID string `json:"id"`
 
 	// 上下文窗口 (system -> L0 -> L1 -> L2)
-	SystemPrompt string   `json:"system_prompt"` // 系统 Prompt
-	L0Page       *Page    `json:"l0_page"`       // 全局唯一的 L0 Page
-	L1Pages      []*Page  `json:"l1_pages"`      // L1 Pages 列表（按时间倒序，最新的在前）
-	L2Pages      []*Page  `json:"l2_pages"`      // L2 Pages 列表（按时间倒序，最新的在前）
+	SystemPrompt string  `json:"system_prompt"` // 系统 Prompt
+	L0Page       *Page   `json:"l0_page"`       // 全局唯一的 L0 Page
+	L1Pages      []*Page `json:"l1_pages"`      // L1 Pages 列表（按时间倒序，最新的在前）
+	L2Page       *Page   `json:"l2_page"`       // 当前活跃的 L2 Page（单一）
 
-	// 配置
-	MaxL1Pages int `json:"max_l1_pages"` // L1 Page 最大数量
-	cfg        *config.Config `json:"-"` // 配置引用
+	// 阈值配置
+	MaxContextTokens int        `json:"max_context_tokens"` // 总上下文硬上限
+	Thresholds       Thresholds `json:"thresholds"`         // 各层级阈值（计算后的绝对值）
+
+	// 状态管理
+	State            SessionState  `json:"state"`             // 当前状态
+	CompressingPages []string      `json:"compressing_pages"` // 正在压缩的 page IDs
+	compressDone     chan struct{} `json:"-"`                 // 压缩完成信号
+
+	// 配置引用
+	cfg *config.Config `json:"-"`
 
 	// 压缩策略
 	L0Strategy *CompressionStrategy `json:"l0_strategy"`
 	L1Strategy *CompressionStrategy `json:"l1_strategy"`
 	L2Strategy *CompressionStrategy `json:"l2_strategy"`
 
-	// 异步压缩管理（仅用于L0）
-	compressor  Compressor   `json:"-"`  // 压缩器
+	// 异步压缩管理（用于L0）
+	compressor  Compressor      `json:"-"` // 压缩器
 	compressWkr *CompressWorker `json:"-"` // 压缩工作器
 
 	// 归档目录
@@ -49,7 +57,6 @@ type Session struct {
 // SessionConfig Session 配置
 type SessionConfig struct {
 	SystemPrompt string
-	MaxL1Pages   int
 	ArchiveDir   string
 	Compressor   Compressor
 	Cfg          *config.Config // 配置引用
@@ -59,10 +66,9 @@ type SessionConfig struct {
 func DefaultSessionConfig() *SessionConfig {
 	return &SessionConfig{
 		SystemPrompt: "You are a helpful AI programming assistant.",
-		MaxL1Pages:   10, // 默认保留 10 个 L1 pages
-		ArchiveDir:   "", // 使用默认归档目录
-		Compressor:   nil, // 需要外部设置
-		Cfg:          nil, // 需要外部设置
+		ArchiveDir:   "",        // 使用默认归档目录
+		Compressor:   nil,       // 需要外部设置
+		Cfg:          nil,       // 需要外部设置
 	}
 }
 
@@ -81,29 +87,36 @@ func NewSession(sessionConfig *SessionConfig) (*Session, error) {
 
 	// 从Config创建策略
 	var l0Strategy, l1Strategy, l2Strategy *CompressionStrategy
+	var maxContextTokens int
 	if cfg != nil {
 		l0Strategy = NewCompressionStrategy(PageTypeL0, cfg)
 		l1Strategy = NewCompressionStrategy(PageTypeL1, cfg)
 		l2Strategy = NewCompressionStrategy(PageTypeL2, cfg)
+		maxContextTokens = cfg.MaxContextTokens
 	} else {
 		l0Strategy, l1Strategy, l2Strategy = DefaultCompressionStrategies()
+		maxContextTokens = 200000 // 默认值
 	}
 
 	session := &Session{
-		ID:           time.Now().Format("20060102-150405"),
-		SystemPrompt: sessionConfig.SystemPrompt,
-		L0Page:       nil, // 初始时没有 L0 page
-		L1Pages:      make([]*Page, 0),
-		L2Pages:      make([]*Page, 0),
-		MaxL1Pages:   sessionConfig.MaxL1Pages,
-		cfg:          cfg,
-		L0Strategy:   l0Strategy,
-		L1Strategy:   l1Strategy,
-		L2Strategy:   l2Strategy,
-		compressor:   sessionConfig.Compressor,
-		ArchiveDir:   sessionConfig.ArchiveDir,
-		logger:       log,
-		initialized:  true,
+		ID:               time.Now().Format("20060102-150405"),
+		SystemPrompt:     sessionConfig.SystemPrompt,
+		L0Page:           nil, // 初始时没有 L0 page
+		L1Pages:          make([]*Page, 0),
+		L2Page:           nil, // 初始时没有 L2 page
+		MaxContextTokens: maxContextTokens,
+		Thresholds:       NewThresholds(cfg),
+		State:            StateNormal,
+		CompressingPages: make([]string, 0),
+		compressDone:     make(chan struct{}, 1),
+		cfg:              cfg,
+		L0Strategy:       l0Strategy,
+		L1Strategy:       l1Strategy,
+		L2Strategy:       l2Strategy,
+		compressor:       sessionConfig.Compressor,
+		ArchiveDir:       sessionConfig.ArchiveDir,
+		logger:           log,
+		initialized:      true,
 	}
 
 	// 设置默认归档目录
@@ -111,54 +124,198 @@ func NewSession(sessionConfig *SessionConfig) (*Session, error) {
 		session.ArchiveDir = "~/.local/share/oxencode/archive"
 	}
 
-	// 创建并启动压缩工作器（仅用于L0）
+	// 创建并启动压缩工作器（用于L0）
 	workerConfig := DefaultCompressWorkerConfig()
 	session.compressWkr = NewCompressWorker(sessionConfig.Compressor, workerConfig)
 	go session.processCompressResults()
 
-	session.logger.Info("Session created", "id", session.ID, "max_l1_pages", session.MaxL1Pages)
+	session.logger.Info("Session created", "id", session.ID, "max_context_tokens", session.MaxContextTokens)
 	return session, nil
 }
 
-// AddMessage 添加消息到 Session（添加到 L2 Page）
-func (s *Session) AddMessage(msg message.Message) {
+// AddAtom 添加原子消息序列到 L2
+// 这是新的主要接口，保证 assistant + tool_results 的原子性
+func (s *Session) AddAtom(atom *message.AtomSequence) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	// 确保有当前的 L2 page
-	if len(s.L2Pages) == 0 {
-		s.L2Pages = append(s.L2Pages, NewL2Page())
-	}
+	// 估算新原子序列的token数
+	newTokens := atom.GetTokenCount()
 
-	// 添加到最新的 L2 page
-	currentL2 := s.L2Pages[0]
-	currentL2.AddMessage(msg)
-
-	// 检查是否超过token限制（兜底策略）
-	if s.cfg != nil && s.cfg.MaxPageTokens > 0 {
-		if currentL2.GetTokenCount() > s.cfg.MaxPageTokens {
-			s.splitL2PageLocked()
+	// 写屏障：检查是否会超过总上限
+	for s.calculateTotalTokensLocked()+newTokens > s.MaxContextTokens {
+		if s.isInCompressingLocked() {
+			// 正在压缩，等待完成
+			s.mu.Unlock()
+			s.waitForCompressComplete()
+			s.mu.Lock()
+		} else {
+			// 没有在压缩，需要主动触发压缩
+			triggered := s.triggerCompressLocked()
+			if !triggered {
+				// 无法触发L0压缩（L1不足），先强制提交L2到L1
+				if s.L2Page != nil && len(s.L2Page.Atoms) > 0 {
+					s.forceCommitL2Locked()
+				}
+				// 再次尝试触发压缩
+				triggered = s.triggerCompressLocked()
+			}
+			if triggered {
+				s.mu.Unlock()
+				s.waitForCompressComplete()
+				s.mu.Lock()
+			} else {
+				// 无法压缩也无法提交（L2为空），打破循环允许消息添加
+				s.logger.Warn("Cannot compress or commit, allowing atom despite exceeding limit")
+				break
+			}
 		}
 	}
 
-	s.logger.Debug("Message added", "page_id", currentL2.ID, "role", msg.Role)
+	// 确保有当前的 L2 page
+	if s.L2Page == nil {
+		s.L2Page = NewL2Page()
+	}
+
+	// 添加原子序列到 L2 page
+	s.L2Page.AddAtom(atom)
+
+	// 检查是否触发 SoftMaxL2
+	if s.L2Page.GetTokenCount() > s.Thresholds.SoftMaxL2 {
+		go s.checkAndCommitL2()
+	}
+
+	// 检查 L1 是否需要压缩（主动管理）
+	l1Tokens := s.getL1TokensLocked()
+	if l1Tokens > s.Thresholds.SoftMaxL1 && !s.isInCompressingLocked() {
+		s.logger.Info("AddAtom: L1 exceeds SoftMax, triggering L0 compression",
+			"l1_tokens", l1Tokens,
+			"threshold", s.Thresholds.SoftMaxL1)
+		s.startL0CompressLocked()
+	}
+
+	s.mu.Unlock()
+
+	s.logger.Debug("Atom added", "atom_id", atom.ID, "has_tool_calls", atom.HasToolCalls())
+	return nil
 }
 
-// splitL2PageLocked 分页：旧消息→L1，新消息→L2（需要持有锁）
-func (s *Session) splitL2PageLocked() {
-	if len(s.L2Pages) == 0 {
+// AddMessage 添加消息到 Session（添加到 L2 Page）
+// 实现写屏障：当总上下文超过硬上限时，阻塞等待压缩完成
+// 注意：此方法保留向后兼容，内部创建单消息原子
+func (s *Session) AddMessage(msg message.Message) error {
+	atom := message.NewAtomSequence()
+	if msg.Role == message.RoleAssistant {
+		atom.SetAssistant(msg)
+	} else if msg.Role == message.RoleUser {
+		atom.SetUserMessage(msg)
+	} else if msg.Role == message.RoleTool {
+		// Tool 消息不能单独添加，需要通过 AddAtom
+		s.logger.Warn("Tool message should be added via AddAtom, creating standalone atom")
+		// 创建一个只包含 tool result 的原子（不推荐，但保持兼容）
+		atom.AddToolResult(msg)
+	}
+	return s.AddAtom(atom)
+}
+
+// estimateMessageTokens 估算消息的token数
+func estimateMessageTokens(msg message.Message) int {
+	// 简单估算：每4个字符约1个token
+	return len(msg.Content) / 4
+}
+
+// isInCompressingLocked 检查是否处于压缩状态（需要持有锁）
+func (s *Session) isInCompressingLocked() bool {
+	return s.State == StateCompressing
+}
+
+// waitForCompressComplete 等待压缩完成
+func (s *Session) waitForCompressComplete() {
+	timeout := time.Duration(s.cfg.CompressTimeout) * time.Second
+	select {
+	case <-s.compressDone:
+		s.logger.Debug("Compression completed, resuming")
+	case <-time.After(timeout):
+		s.logger.Warn("Compress wait timeout", "timeout", timeout)
+	}
+}
+
+// triggerCompressLocked 触发L0压缩（需要持有锁）
+// 返回是否成功触发了压缩
+func (s *Session) triggerCompressLocked() bool {
+	if s.isInCompressingLocked() {
+		return false
+	}
+
+	// 检查L1是否需要压缩
+	l1Tokens := s.getL1TokensLocked()
+	if l1Tokens > s.Thresholds.SoftMaxL1 {
+		s.startL0CompressLocked()
+		return true
+	}
+	return false
+}
+
+// forceCommitL2Locked 强制提交L2到L1（不检查阈值，用于紧急分页）
+func (s *Session) forceCommitL2Locked() {
+	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
 		return
 	}
 
-	currentL2 := s.L2Pages[0]
-	messages := currentL2.Messages
+	// 创建L1 Page
+	l1Page := NewPage(PageTypeL1, s.L1Strategy)
+	l1Page.Messages = s.L2Page.Messages
+	l1Page.Preprocess()
 
-	if len(messages) < 2 {
-		s.logger.Warn("Cannot split page with less than 2 messages")
+	// 添加到L1列表
+	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
+
+	// 创建新的空L2
+	s.L2Page = NewL2Page()
+
+	s.logger.Info("L2 force committed to L1", "messages", len(l1Page.Messages))
+}
+
+// getL1TokensLocked 获取L1的总token数（需要持有锁）
+func (s *Session) getL1TokensLocked() int {
+	total := 0
+	for _, p := range s.L1Pages {
+		total += p.GetTokenCount()
+	}
+	return total
+}
+
+// checkAndCommitL2 检查并提交一半L2到L1
+// 注意：此方法是异步调用的，不应该阻塞等待压缩完成
+func (s *Session) checkAndCommitL2() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
 		return
 	}
 
-	// 按1/2分割
+	// 如果 L1 正在压缩，不等待，直接提交一半 L2 到 L1
+	// 压缩完成后只会移除正在压缩的那些 L1 pages，新添加的不受影响
+
+	// 检查是否需要触发L1->L0压缩（如果已经在压缩中，则不重复触发）
+	if !s.isInCompressingLocked() {
+		l1Tokens := s.getL1TokensLocked()
+		if l1Tokens > s.Thresholds.SoftMaxL1 {
+			s.startL0CompressLocked()
+		}
+	}
+
+	// 提交一半L2到L1
+	s.commitHalfL2Locked()
+}
+
+// commitHalfL2Locked 提交一半L2到L1（需要持有锁）
+func (s *Session) commitHalfL2Locked() {
+	if s.L2Page == nil || len(s.L2Page.Messages) < 2 {
+		return
+	}
+
+	messages := s.L2Page.Messages
 	mid := len(messages) / 2
 	oldMessages := messages[:mid]
 	newMessages := messages[mid:]
@@ -166,61 +323,101 @@ func (s *Session) splitL2PageLocked() {
 	// 旧消息创建L1 Page
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
 	l1Page.Messages = oldMessages
-	l1Page.Preprocess() // L1预处理（截断）
+	l1Page.Preprocess()
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
-
-	// 检查是否需要压缩 L0
-	if len(s.L1Pages) > s.MaxL1Pages {
-		s.compressL0Locked()
-	}
 
 	// 新消息保留为L2
 	newL2 := NewL2Page()
 	newL2.Messages = newMessages
-	s.L2Pages[0] = newL2
+	s.L2Page = newL2
 
-	s.logger.Info("L2 page split due to token limit",
-		"old_messages", len(oldMessages),
-		"new_messages", len(newMessages))
+	s.logger.Info("L2 committed to L1", "old_messages", len(oldMessages), "new_messages", len(newMessages))
+}
+
+// startL0CompressLocked 开始L0压缩（异步）（需要持有锁）
+func (s *Session) startL0CompressLocked() {
+	if s.isInCompressingLocked() {
+		return
+	}
+
+	// 计算需要压缩的L1数量（一半）
+	halfCount := len(s.L1Pages) / 2
+	if halfCount == 0 && len(s.L1Pages) > 0 {
+		halfCount = 1
+	}
+	if halfCount == 0 {
+		return
+	}
+
+	// 取出最旧的L1 pages（列表末尾）
+	toCompress := s.L1Pages[len(s.L1Pages)-halfCount:]
+	pageIDs := make([]string, len(toCompress))
+	for i, p := range toCompress {
+		pageIDs[i] = string(p.ID)
+	}
+
+	// 设置状态
+	s.State = StateCompressing
+	s.CompressingPages = pageIDs
+
+	// 准备压缩内容
+	var content string
+	if s.L0Page != nil {
+		content = s.L0Page.Content + "\n\n"
+	}
+	for _, p := range toCompress {
+		content += p.Render() + "\n\n"
+	}
+
+	// 创建压缩用的Page
+	compressPage := NewPage(PageTypeL0, s.L0Strategy)
+	compressPage.Content = content
+
+	// 提交异步压缩任务
+	s.compressWkr.Submit(compressPage, 1)
+
+	s.logger.Info("L0 compression started", "pages", halfCount)
 }
 
 // Commit 提交当前 L2 page，创建 L1 page 并预处理
-// L1不再调用LLM压缩，只进行截断预处理
+// 用于一轮交互结束后的显式提交
+// 注意：此方法不会阻塞等待 L1 压缩完成，以确保主流程不被阻塞
 func (s *Session) Commit(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.L2Pages) == 0 {
+	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
 		return nil // 没有需要提交的
 	}
 
-	// 获取当前的 L2 page
-	currentL2 := s.L2Pages[0]
-
 	// 归档 L2 page
-	if _, err := currentL2.Archive(s.ArchiveDir); err != nil {
+	if _, err := s.L2Page.Archive(s.ArchiveDir); err != nil {
 		s.logger.Warn("Failed to archive L2 page", "error", err)
 	}
 
 	// 创建新的 L1 page
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
-	l1Page.Messages = currentL2.Messages
+	l1Page.Messages = s.L2Page.Messages
 
 	// L1预处理（截断，不调用LLM）
 	l1Page.Preprocess()
 
-	// 添加到 L1Pages
+	// 添加到 L1Pages（即使 L1 正在压缩也不阻塞）
+	// 压缩完成后只会移除正在压缩的那些 L1 pages，新添加的不受影响
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
 
-	// 检查是否需要压缩 L0
-	if len(s.L1Pages) > s.MaxL1Pages {
-		s.compressL0Locked()
+	// 检查是否需要触发L0压缩（如果已经在压缩中，则不重复触发）
+	if !s.isInCompressingLocked() {
+		l1Tokens := s.getL1TokensLocked()
+		if l1Tokens > s.Thresholds.SoftMaxL1 {
+			s.startL0CompressLocked()
+		}
 	}
 
 	// 替换当前的 L2 page 为新的空 page
-	s.L2Pages[0] = NewL2Page()
+	s.L2Page = NewL2Page()
 
-	s.logger.Info("Session committed", "l2_page_id", currentL2.ID, "l1_page_id", l1Page.ID)
+	s.logger.Info("Session committed", "l1_page_id", l1Page.ID)
 	return nil
 }
 
@@ -237,101 +434,83 @@ func (s *Session) GetContext() []message.Message {
 		messages = append(messages, message.NewMessage(message.RoleSystem, s.SystemPrompt))
 	}
 
-	// 2. 添加 L0 page（如果有）
-	if s.L0Page != nil {
+	// 2. 添加 L0 page（如果有且非空）
+	if s.L0Page != nil && s.L0Page.Content != "" {
 		messages = append(messages, message.NewMessage(message.RoleSystem, s.L0Page.Render()))
 	}
 
 	// 3. 添加 L1 pages（按时间正序：从最旧到最新）
 	// L1Pages 是倒序存储（最新在前），需要反向遍历
+	// 注意：保留原始消息结构，而不是渲染成文本，以保持 tool_calls 和 tool 结果的正确关联
 	for i := len(s.L1Pages) - 1; i >= 0; i-- {
 		p := s.L1Pages[i]
-		content := p.Render()
-		messages = append(messages, message.NewMessage(message.RoleAssistant, content))
+		// 使用 ProcessedMessages（如果已预处理），否则使用原始 Messages
+		msgs := p.Messages
+		if p.ProcessedMessages != nil {
+			msgs = p.ProcessedMessages
+		}
+		messages = append(messages, msgs...)
 	}
 
-	// 4. 添加 L2 pages（按时间正序：从最旧到最新）
-	// L2Pages 也是倒序存储（最新在前），需要反向遍历
-	for i := len(s.L2Pages) - 1; i >= 0; i-- {
-		p := s.L2Pages[i]
-		messages = append(messages, p.Messages...)
+	// 4. 添加 L2 page
+	if s.L2Page != nil {
+		messages = append(messages, s.L2Page.Messages...)
 	}
 
-	s.logger.Debug("Context built", "total_messages", len(messages), "l1_count", len(s.L1Pages), "l2_count", len(s.L2Pages))
+	s.logger.Debug("Context built", "total_messages", len(messages), "l1_count", len(s.L1Pages))
 	return messages
 }
 
 // processCompressResults 处理压缩结果
 func (s *Session) processCompressResults() {
 	for result := range s.compressWkr.Results() {
+		s.mu.Lock()
+
 		if result.Error != nil {
 			s.logger.Error("Compression failed", "page_id", result.PageID, "error", result.Error)
+			// 即使失败也要结束压缩状态
+			s.endCompressLocked()
+			s.mu.Unlock()
 			continue
 		}
 
 		s.logger.Info("Compress result received", "page_id", result.PageID)
 
-		// 查找并更新对应的 page
-		s.mu.Lock()
-		var page *Page
-		for i := range s.L1Pages {
-			if s.L1Pages[i].ID == result.PageID {
-				page = s.L1Pages[i]
-				break
-			}
-		}
+		// 更新L0 page
+		s.L0Page = NewPage(PageTypeL0, s.L0Strategy)
+		s.L0Page.Content = result.Content
 
-		if page != nil {
-			page.Content = result.Content
-			// 检查是否需要压缩 L0
-			if len(s.L1Pages) > s.MaxL1Pages {
-				s.compressL0Locked()
-			}
-			s.logger.Info("Page processed", "page_id", result.PageID)
-		} else {
-			s.logger.Warn("Page not found", "page_id", result.PageID)
+		// 移除已压缩的L1 pages
+		compressedSet := make(map[string]bool)
+		for _, id := range s.CompressingPages {
+			compressedSet[id] = true
 		}
+		newL1Pages := make([]*Page, 0)
+		for _, p := range s.L1Pages {
+			if !compressedSet[string(p.ID)] {
+				newL1Pages = append(newL1Pages, p)
+			}
+		}
+		s.L1Pages = newL1Pages
+
+		// 结束压缩状态
+		s.endCompressLocked()
+
+		s.logger.Info("L0 compression completed")
 		s.mu.Unlock()
+
+		// 通知等待的协程
+		select {
+		case s.compressDone <- struct{}{}:
+		default:
+		}
 	}
 }
 
-// compressL0Locked 压缩 L0 page（需要持有锁）
-func (s *Session) compressL0Locked() {
-	if len(s.L1Pages) <= s.MaxL1Pages {
-		return
-	}
-
-	// TODO: n由L1压缩百分比决定，该百分比将由配置文件决定
-	// 取出最旧的 n 个 L1 pages 进行压缩到 L0
-	n := len(s.L1Pages) - s.MaxL1Pages
-	oldL1Pages := s.L1Pages[len(s.L1Pages)-n:]
-
-	// 合并内容（使用 Render() 而非 Content，因为 L1 现在使用预处理消息）
-	var mergedContent string
-	if s.L0Page != nil {
-		mergedContent = s.L0Page.Content + "\n\n"
-	}
-	for _, p := range oldL1Pages {
-		mergedContent += p.Render() + "\n\n"
-	}
-
-	// 创建新的 L0 page
-	newL0Page := NewPage(PageTypeL0, s.L0Strategy)
-	newL0Page.Content = mergedContent
-
-	// 归档旧的 L1 pages
-	for _, p := range oldL1Pages {
-		if p.ArchivedFile != "" {
-			// 追加到 L0 的归档文件
-			// TODO: 实现归档文件合并
-		}
-	}
-
-	// 更新 L0 page 和 L1 pages
-	s.L0Page = newL0Page
-	s.L1Pages = s.L1Pages[:s.MaxL1Pages]
-
-	s.logger.Info("L0 compressed", "merged_pages", n)
+// endCompressLocked 结束压缩状态（需要持有锁）
+func (s *Session) endCompressLocked() {
+	s.State = StateNormal
+	s.CompressingPages = make([]string, 0)
 }
 
 // GetStats 返回 Session 统计信息
@@ -340,8 +519,8 @@ func (s *Session) GetStats() SessionStats {
 	defer s.mu.RUnlock()
 
 	l2TokenCount := 0
-	for _, p := range s.L2Pages {
-		l2TokenCount += p.GetTokenCount()
+	if s.L2Page != nil {
+		l2TokenCount = s.L2Page.GetTokenCount()
 	}
 
 	l1TokenCount := 0
@@ -359,17 +538,17 @@ func (s *Session) GetStats() SessionStats {
 		TotalL1Tokens: l1TokenCount,
 		TotalL2Tokens: l2TokenCount,
 		L1PageCount:   len(s.L1Pages),
-		L2PageCount:   len(s.L2Pages),
+		State:         s.State,
 	}
 }
 
 // SessionStats Session 统计信息
 type SessionStats struct {
-	TotalL0Tokens int `json:"total_l0_tokens"`
-	TotalL1Tokens int `json:"total_l1_tokens"`
-	TotalL2Tokens int `json:"total_l2_tokens"`
-	L1PageCount   int `json:"l1_page_count"`
-	L2PageCount   int `json:"l2_page_count"`
+	TotalL0Tokens int           `json:"total_l0_tokens"`
+	TotalL1Tokens int           `json:"total_l1_tokens"`
+	TotalL2Tokens int           `json:"total_l2_tokens"`
+	L1PageCount   int           `json:"l1_page_count"`
+	State         SessionState  `json:"state"`
 }
 
 // Close 关闭 Session
@@ -377,28 +556,8 @@ func (s *Session) Close() {
 	if s.compressWkr != nil {
 		s.compressWkr.Stop()
 	}
+	close(s.compressDone)
 	s.logger.Info("Session closed", "id", s.ID)
-}
-
-// CheckAndSplit 检查并触发分页
-// 当 L2 Page 超过阈值时自动分割
-func (s *Session) CheckAndSplit() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(s.L2Pages) == 0 {
-		return
-	}
-
-	currentL2 := s.L2Pages[0]
-	if s.cfg != nil && s.cfg.MaxPageTokens > 0 {
-		if currentL2.GetTokenCount() > s.cfg.MaxPageTokens {
-			s.splitL2PageLocked()
-			s.logger.Info("L2 page auto-split due to token limit",
-				"tokens", currentL2.GetTokenCount(),
-				"threshold", s.cfg.MaxPageTokens)
-		}
-	}
 }
 
 // GetTotalTokenCount 获取当前总 token 数
@@ -418,42 +577,46 @@ func (s *Session) calculateTotalTokensLocked() int {
 	for _, p := range s.L1Pages {
 		total += p.GetTokenCount()
 	}
-	for _, p := range s.L2Pages {
-		total += p.GetTokenCount()
+	if s.L2Page != nil {
+		total += s.L2Page.GetTokenCount()
 	}
 	return total
 }
 
 // ForceCommit 强制提交当前 L2（用于紧急分页）
+// 注意：此方法不会阻塞等待 L1 压缩完成
 func (s *Session) ForceCommit(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.L2Pages) == 0 || len(s.L2Pages[0].Messages) == 0 {
+	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
 		return nil
 	}
 
 	// 归档
-	currentL2 := s.L2Pages[0]
-	if _, err := currentL2.Archive(s.ArchiveDir); err != nil {
+	if _, err := s.L2Page.Archive(s.ArchiveDir); err != nil {
 		s.logger.Warn("Failed to archive L2 page", "error", err)
 	}
 
 	// 创建 L1
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
-	l1Page.Messages = currentL2.Messages
+	l1Page.Messages = s.L2Page.Messages
 	l1Page.Preprocess()
 
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
 
-	// 检查 L0 压缩
-	if len(s.L1Pages) > s.MaxL1Pages {
-		s.compressL0Locked()
+	// 检查 L0 压缩（如果已经在压缩中，则不重复触发）
+	if !s.isInCompressingLocked() {
+		l1Tokens := s.getL1TokensLocked()
+		if l1Tokens > s.Thresholds.SoftMaxL1 {
+			s.startL0CompressLocked()
+		}
 	}
 
 	// 新 L2
-	s.L2Pages[0] = NewL2Page()
+	s.L2Page = NewL2Page()
 
 	s.logger.Info("Session force committed")
 	return nil
 }
+

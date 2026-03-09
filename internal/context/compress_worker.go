@@ -124,7 +124,15 @@ func (w *CompressWorker) processTask(task *CompressTask, workerID int) {
 	defer cancel()
 
 	// 执行压缩
-	content, err := w.compressor.Compress(ctx, joinMessages(task.Page.Messages), task.Page.Strategy)
+	// L0 压缩使用 Content（已预处理的内容），L1/L2 使用 Messages
+	var inputContent string
+	if task.Page.Type == PageTypeL0 && task.Page.Content != "" {
+		inputContent = task.Page.Content
+	} else {
+		inputContent = joinMessages(task.Page.Messages)
+	}
+
+	content, err := w.compressor.Compress(ctx, inputContent, task.Page.Strategy)
 
 	// 发送结果
 	result := &CompressResult{

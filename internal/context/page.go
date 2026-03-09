@@ -18,15 +18,19 @@ const TruncatedMarker = "\n[...truncated]"
 
 // Page 维护一轮交互的所有 message
 type Page struct {
-	ID           PageID              `json:"id"`                // 页面唯一标识
-	Type         PageType            `json:"type"`              // 页面类型 (L0/L1/L2)
+	ID           PageID               `json:"id"`                // 页面唯一标识
+	Type         PageType             `json:"type"`              // 页面类型 (L0/L1/L2)
 	Strategy     *CompressionStrategy `json:"strategy"`         // 压缩策略配置
-	Content      string              `json:"content"`           // 根据 schema 压缩后的内容缓存
-	ArchivedFile string              `json:"archived_file"`     // 归档文件路径
-	CreatedAt    time.Time           `json:"created_at"`        // 创建时间
-	UpdatedAt    time.Time           `json:"updated_at"`        // 更新时间
+	Content      string               `json:"content"`           // 根据 schema 压缩后的内容缓存
+	ArchivedFile string               `json:"archived_file"`     // 归档文件路径
+	CreatedAt    time.Time            `json:"created_at"`        // 创建时间
+	UpdatedAt    time.Time            `json:"updated_at"`        // 更新时间
 
-	// 原始消息引用（L2 Pages 使用）
+	// 原子消息序列列表（替代原来的 Messages）
+	// 每个 AtomSequence 是不可分割的单元，保证 tool_calls 和 tool results 的原子性
+	Atoms []*message.AtomSequence `json:"atoms,omitempty"`
+
+	// 原始消息引用（保留用于序列化/反序列化兼容性，以及 L0 渲染）
 	Messages []message.Message `json:"messages,omitempty"`
 
 	// 预处理后的消息（L1 使用）
@@ -41,6 +45,7 @@ func NewPage(pageType PageType, strategy *CompressionStrategy) *Page {
 		Strategy:  strategy,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
+		Atoms:     make([]*message.AtomSequence, 0),
 		Messages:  make([]message.Message, 0),
 	}
 }
@@ -51,16 +56,48 @@ func NewL2Page() *Page {
 	return NewPage(PageTypeL2, l2Strategy)
 }
 
-// AddMessage 添加消息到 Page
-func (p *Page) AddMessage(msg message.Message) {
-	p.Messages = append(p.Messages, msg)
+// AddAtom 添加原子消息序列到 Page
+// 保证 Page 内部不会有孤儿消息（tool result 一定有对应的 assistant + tool_calls）
+func (p *Page) AddAtom(atom *message.AtomSequence) {
+	p.Atoms = append(p.Atoms, atom)
 	p.UpdatedAt = time.Now()
+}
+
+// AddMessage 添加消息到 Page（保留向后兼容）
+// 注意：此方法会创建一个单消息的 AtomSequence，仅适用于 user 消息或不含 tool_calls 的 assistant 消息
+func (p *Page) AddMessage(msg message.Message) {
+	atom := message.NewAtomSequence()
+	if msg.Role == message.RoleAssistant {
+		atom.SetAssistant(msg)
+	} else if msg.Role == message.RoleUser {
+		atom.SetUserMessage(msg)
+	} else if msg.Role == message.RoleTool {
+		// Tool 消息应该通过 AddAtom 添加，这里仅作为 fallback
+		p.Messages = append(p.Messages, msg)
+		p.UpdatedAt = time.Now()
+		return
+	}
+	p.AddAtom(atom)
+}
+
+// BuildMessages 从 Atoms 构建消息列表
+func (p *Page) BuildMessages() []message.Message {
+	// 优先使用 Atoms 构建
+	if len(p.Atoms) > 0 {
+		msgs := make([]message.Message, 0)
+		for _, atom := range p.Atoms {
+			msgs = append(msgs, atom.ToMessages()...)
+		}
+		return msgs
+	}
+	// fallback 到原始 Messages
+	return p.Messages
 }
 
 // Compress 压缩页面内容
 // 使用配置的 strategy 将原始 messages 压缩为 Content
 func (p *Page) Compress(ctx context.Context, compressor Compressor) error {
-	if p.Strategy == nil || p.Strategy.Schema == "" {
+	if p.Strategy == nil || p.Strategy.Skill == "" {
 		// 没有配置压缩策略，直接序列化 messages
 		data, err := json.Marshal(p.Messages)
 		if err != nil {
@@ -118,6 +155,15 @@ func (p *Page) GetTokenCount() int {
 	if p.Content != "" {
 		return len(p.Content) / 4
 	}
+	// 优先使用 Atoms 计算
+	if len(p.Atoms) > 0 {
+		count := 0
+		for _, atom := range p.Atoms {
+			count += atom.GetTokenCount()
+		}
+		return count
+	}
+	// fallback 到 Messages
 	count := 0
 	for _, msg := range p.Messages {
 		count += len(msg.Content) / 4
@@ -136,6 +182,9 @@ func (p *Page) Preprocess() {
 	if p.Strategy == nil {
 		return
 	}
+
+	// 从 Atoms 构建消息列表
+	p.Messages = p.BuildMessages()
 
 	processed := make([]message.Message, len(p.Messages))
 	for i, msg := range p.Messages {
