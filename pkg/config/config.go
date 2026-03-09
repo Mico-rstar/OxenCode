@@ -89,6 +89,9 @@ type Config struct {
 	// ReAct 循环配置
 	MaxReActIterations  int `mapstructure:"max_react_iterations"`   // ReAct 循环最大迭代次数
 	ToolOutputMaxLength int `mapstructure:"tool_output_max_length"` // 工具输出最大长度，0表示使用默认值
+
+	// Session 配置
+	ArchiveDir string `mapstructure:"archive_dir"` // 归档目录
 }
 
 var cfg *Config

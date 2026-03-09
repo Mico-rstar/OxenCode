@@ -143,7 +143,7 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 			}
 
 			// 构建消息
-			messages := r.builder.Build(r.systemPrompt)
+			messages := r.builder.Build()
 
 			// Debug: 打印消息详情
 			r.logger.Debug("Built messages for LLM", "count", len(messages))
@@ -248,6 +248,9 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 
 			// 处理流结束后仍有工具调用的情况
 			if len(toolCalls) > 0 {
+				// 创建原子序列：assistant + tool results
+				atom := message.NewAtomSequence()
+
 				// 创建 Assistant 消息，包含工具调用信息
 				assistantMsg := message.NewMessage(message.RoleAssistant, finalContent.String())
 				for _, tc := range toolCalls {
@@ -264,9 +267,9 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 					// 使用 LLM 返回的 ToolCallID，而不是生成新的
 					assistantMsg.AddToolCallWithID(tc.ToolCallID, tc.ToolName, inputMap)
 				}
-				r.session.AddMessage(assistantMsg)
+				atom.SetAssistant(assistantMsg)
 
-				// 执行工具
+				// 执行工具并收集结果
 				for _, tc := range toolCalls {
 					result, err := r.executor.Execute(ctx, tc)
 					if err != nil {
@@ -275,9 +278,9 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 						return
 					}
 
-					// 添加工具结果到 Session（包含 tool_call_id）
+					// 添加工具结果到原子序列
 					toolMsg := message.NewToolResultMessage(tc.ToolCallID, result.Output)
-					r.session.AddMessage(toolMsg)
+					atom.AddToolResult(toolMsg)
 
 					// 快照：工具执行后
 					r.snapshot("tool_result_" + tc.ToolName)
@@ -289,6 +292,9 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 						return
 					}
 				}
+
+				// 原子性地添加整个序列到 Session
+				r.session.AddAtom(atom)
 			}
 		}
 

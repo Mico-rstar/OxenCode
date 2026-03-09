@@ -29,29 +29,16 @@ func NewMessageBuilder(session *ctxpkg.Session, config *config.Config, logger lo
 
 // Build 构建消息列表
 // systemPrompt 作为系统消息添加到开头
-func (b *MessageBuilder) Build(systemPrompt string) []fantasy.Message {
+func (b *MessageBuilder) Build() []fantasy.Message {
 	// 从 Session 获取上下文
 	ctxMsgs := b.session.GetContext()
 
 	// 转换为 fantasy.Message
 	messages := make([]fantasy.Message, 0, len(ctxMsgs)+1)
 
-	// 添加系统提示词（如果提供）
-	if systemPrompt != "" {
-		messages = append(messages, fantasy.NewSystemMessage(systemPrompt))
-	}
-
 	// 转换每条消息
 	for _, msg := range ctxMsgs {
-		// 跳过系统消息（已经在上面添加了）
-		if msg.Role == message.RoleSystem {
-			continue
-		}
 		converted := b.convertMessage(msg)
-		// Debug: 打印工具相关消息
-		if msg.Role == message.RoleTool || msg.Role == message.RoleAssistant {
-			b.logger.Debug("Converting message", "role", msg.Role, "tool_call_id", msg.ToolCallID, "react_loop_count", len(msg.ReActLoop))
-		}
 		messages = append(messages, converted)
 	}
 
@@ -120,12 +107,4 @@ func (b *MessageBuilder) convertMessage(msg message.Message) fantasy.Message {
 		// 未知角色，作为用户消息处理
 		return fantasy.NewUserMessage(msg.Content)
 	}
-}
-
-// BuildWithTools 构建包含工具定义的消息
-// 用于支持工具调用的场景
-func (b *MessageBuilder) BuildWithTools(systemPrompt string, tools []fantasy.Tool) []fantasy.Message {
-	messages := b.Build(systemPrompt)
-	// 工具定义在 Call 结构中传递，不需要在消息中包含
-	return messages
 }

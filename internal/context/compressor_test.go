@@ -117,11 +117,7 @@ func TestL0CompressWithSession(t *testing.T) {
 	}
 
 	// 创建 Session
-	session, err := NewSession(&SessionConfig{
-		SystemPrompt: "You are a helpful AI assistant.",
-		Compressor:   compressor,
-		Cfg:          cfg,
-	})
+	session, err := NewSession("You are a helpful AI assistant.", cfg, compressor)
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}

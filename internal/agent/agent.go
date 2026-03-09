@@ -124,11 +124,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	}
 
 	// 直接创建 Session
-	session, err := ctxpkg.NewSession(&ctxpkg.SessionConfig{
-		SystemPrompt: systemPrompt,
-		Compressor:   compressor,
-		Cfg:          cfg,
-	})
+	session, err := ctxpkg.NewSession(systemPrompt, cfg, compressor)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
