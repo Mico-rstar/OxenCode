@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	ctxpkg "github.com/yourname/oxencode/internal/context"
 	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/internal/tools"
 	"github.com/yourname/oxencode/pkg/config"
@@ -97,44 +96,7 @@ func TestToolExecutor_GetToolOutputMaxLength(t *testing.T) {
 	})
 }
 
-// ========================================
-// MessageBuilder Tests
-// ========================================
 
-func TestMessageBuilder_Build(t *testing.T) {
-	t.Run("with system prompt", func(t *testing.T) {
-		// Create mock session
-		session := createMockSession(t)
-		defer session.Close()
-
-		builder := NewMessageBuilder(session, nil, logger.New("test"))
-		messages := builder.Build("You are a helpful assistant.")
-
-		if len(messages) < 1 {
-			t.Fatal("expected at least system message")
-		}
-
-		// First message should be system
-		if messages[0].Role != fantasy.MessageRoleSystem {
-			t.Errorf("expected system message, got %s", messages[0].Role)
-		}
-	})
-
-	t.Run("without system prompt", func(t *testing.T) {
-		session := createMockSession(t)
-		defer session.Close()
-
-		builder := NewMessageBuilder(session, nil, logger.New("test"))
-		messages := builder.Build("")
-
-		// Should not have system message if empty prompt
-		for _, msg := range messages {
-			if msg.Role == fantasy.MessageRoleSystem {
-				t.Error("unexpected system message with empty prompt")
-			}
-		}
-	})
-}
 
 func TestMessageBuilder_ConvertMessage(t *testing.T) {
 	builder := &MessageBuilder{
@@ -198,28 +160,6 @@ func TestReActLoop_GetMaxIterations(t *testing.T) {
 	})
 }
 
-func TestReActLoop_GetContextCheckThreshold(t *testing.T) {
-	reactLoop := &ReActLoop{
-		cfg:    nil,
-		logger: logger.New("test"),
-	}
-
-	if got := reactLoop.getContextCheckThreshold(); got != 80000 {
-		t.Errorf("expected 80000, got %d", got)
-	}
-}
-
-func TestReActLoop_GetEmergencySplitThreshold(t *testing.T) {
-	reactLoop := &ReActLoop{
-		cfg:    nil,
-		logger: logger.New("test"),
-	}
-
-	if got := reactLoop.getEmergencySplitThreshold(); got != 100000 {
-		t.Errorf("expected 100000, got %d", got)
-	}
-}
-
 func TestReActLoop_FormatToolInput(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -251,27 +191,7 @@ func TestReActLoop_FormatToolInput(t *testing.T) {
 	}
 }
 
-// ========================================
-// Helper Functions
-// ========================================
 
-func createMockSession(t *testing.T) *ctxpkg.Session {
-	t.Helper()
-
-	compressor := ctxpkg.NewMockCompressor(1000)
-
-	session, err := ctxpkg.NewSession(&ctxpkg.SessionConfig{
-		SystemPrompt: "Test system prompt",
-		MaxL1Pages:   10,
-		Compressor:   compressor,
-		Cfg:          nil,
-	})
-	if err != nil {
-		t.Fatalf("failed to create session: %v", err)
-	}
-
-	return session
-}
 
 // ========================================
 // Callback Tests

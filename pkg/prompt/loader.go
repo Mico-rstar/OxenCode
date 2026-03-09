@@ -25,8 +25,10 @@ type Prompt struct {
 
 	// 压缩器提示词
 	CompressorSystemPrompt string `prompt:"compressor_system.md"`
-	L0Schema               string `prompt:"modules/l0_schema.md"`
-	L1Schema               string `prompt:"modules/l1_schema.md"`
+
+	// 压缩 Skill
+	L0Skill string `prompt:"modules/l0_compressed_skill.md"`
+	L1Skill string `prompt:"modules/l1_compressed_skill.md"`
 
 	promptDir string
 	cache     map[string]string

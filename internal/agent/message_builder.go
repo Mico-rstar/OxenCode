@@ -47,7 +47,12 @@ func (b *MessageBuilder) Build(systemPrompt string) []fantasy.Message {
 		if msg.Role == message.RoleSystem {
 			continue
 		}
-		messages = append(messages, b.convertMessage(msg))
+		converted := b.convertMessage(msg)
+		// Debug: 打印工具相关消息
+		if msg.Role == message.RoleTool || msg.Role == message.RoleAssistant {
+			b.logger.Debug("Converting message", "role", msg.Role, "tool_call_id", msg.ToolCallID, "react_loop_count", len(msg.ReActLoop))
+		}
+		messages = append(messages, converted)
 	}
 
 	b.logger.Debug("Messages built", "count", len(messages))
@@ -73,6 +78,7 @@ func (b *MessageBuilder) convertMessage(msg message.Message) fantasy.Message {
 		for _, step := range msg.ReActLoop {
 			if step.ToolCall != nil {
 				inputJSON, _ := json.Marshal(step.ToolCall.Input)
+				b.logger.Info("Adding tool call to assistant message", "tool_call_id", step.ToolCall.ID, "tool_name", step.ToolCall.Name)
 				parts = append(parts, fantasy.ToolCallPart{
 					ToolCallID: step.ToolCall.ID,
 					ToolName:   step.ToolCall.Name,
@@ -87,8 +93,22 @@ func (b *MessageBuilder) convertMessage(msg message.Message) fantasy.Message {
 		}
 
 	case message.RoleTool:
-		// 工具结果作为用户消息的一部分
-		// 注意：fantasy 的工具结果格式需要特殊处理
+		// 工具结果需要关联到对应的 tool_call_id
+		if msg.ToolCallID != "" {
+			b.logger.Info("Converting tool result", "tool_call_id", msg.ToolCallID, "content_len", len(msg.Content))
+			// 使用正确的 ToolResultPart 格式，role 应该是 MessageRoleTool
+			return fantasy.Message{
+				Role: fantasy.MessageRoleTool,
+				Content: []fantasy.MessagePart{
+					fantasy.ToolResultPart{
+						ToolCallID: msg.ToolCallID,
+						Output:     fantasy.ToolResultOutputContentText{Text: msg.Content},
+					},
+				},
+			}
+		}
+		b.logger.Warn("Tool result without tool_call_id", "content_len", len(msg.Content))
+		// 如果没有 tool_call_id，使用旧格式（兼容）
 		return fantasy.Message{
 			Role: fantasy.MessageRoleUser,
 			Content: []fantasy.MessagePart{

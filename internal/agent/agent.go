@@ -18,7 +18,6 @@ import (
 
 	ctxpkg "github.com/yourname/oxencode/internal/context"
 	ctxarchive "github.com/yourname/oxencode/internal/context/archive"
-	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/internal/tools"
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
@@ -28,16 +27,16 @@ import (
 // Agent AI Agent 核心结构
 type Agent struct {
 	// 核心组件
-	reactLoop    *ReActLoop            // 自实现的 ReAct 循环
-	provider     fantasy.Provider      // fantasy Provider（多 Provider 支持）
-	model        fantasy.LanguageModel // fantasy LanguageModel
-	session      *ctxpkg.Session       // 上下文会话（直接持有）
+	reactLoop *ReActLoop            // 自实现的 ReAct 循环
+	provider  fantasy.Provider      // fantasy Provider（多 Provider 支持）
+	model     fantasy.LanguageModel // fantasy LanguageModel
+	session   *ctxpkg.Session       // 上下文会话（直接持有）
 
 	// 通用字段
 	config       *config.Config
-	toolRegistry *tools.Registry     // 工具注册表
-	env          tools.Environment   // 执行环境
-	logger       logger.Logger       // 日志记录器
+	toolRegistry *tools.Registry   // 工具注册表
+	env          tools.Environment // 执行环境
+	logger       logger.Logger     // 日志记录器
 
 	// 快照管理器（用于调试和监控）
 	snapshotManager *SnapshotManager
@@ -114,17 +113,19 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	systemPrompt := loadSystemPrompt(cfg, log)
 
 	// 创建压缩器（仅用于L0）
-	var compressor ctxpkg.Compressor
-	compressor, err = ctxpkg.NewLLMCompressorWithProvider(context.Background(), provider, cfg, log)
+	// 注意：使用独立的 provider，不设置 stream_options 等流式专用配置
+	compressorProvider, err := createCompressorProvider(cfg, apiKey)
 	if err != nil {
-		log.Warn("Failed to create LLM compressor, using mock", "error", err)
-		compressor = ctxpkg.NewMockCompressor(1024)
+		return nil, fmt.Errorf("failed to create compressor provider: %w", err)
+	}
+	compressor, err := ctxpkg.NewLLMCompressorWithProvider(context.Background(), compressorProvider, cfg, log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create LLM compressor: %w", err)
 	}
 
 	// 直接创建 Session
 	session, err := ctxpkg.NewSession(&ctxpkg.SessionConfig{
 		SystemPrompt: systemPrompt,
-		MaxL1Pages:   10,
 		Compressor:   compressor,
 		Cfg:          cfg,
 	})
@@ -157,8 +158,6 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	}, nil
 }
 
-
-
 // loadSystemPrompt 加载系统提示词
 func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 	// 尝试从 prompt 目录加载
@@ -173,9 +172,6 @@ func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 	log.Info("System prompt loaded", "source", promptDir, "length", len(p.SystemPrompt))
 	return p.SystemPrompt
 }
-
-
-
 
 // createProvider 根据 provider 类型创建对应的 provider
 func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error) {
@@ -281,33 +277,92 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 	}
 }
 
-// ClearHistory 清空对话历史（创建新 Session）
-func (a *Agent) ClearHistory() {
-	// 复用当前 session 的 system prompt
-	systemPrompt := a.session.SystemPrompt
+// createCompressorProvider 创建用于压缩器的 provider
+// 注意：不设置 stream_options 等流式专用配置，因为压缩器使用非流式调用（Generate）
+func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error) {
+	switch cfg.Provider {
+	case config.ProviderAnthropic:
+		return anthropic.New(
+			anthropic.WithAPIKey(apiKey),
+		)
 
-	// 关闭旧 session
-	a.session.Close()
+	case config.ProviderOpenAI:
+		return openai.New(
+			openai.WithAPIKey(apiKey),
+		)
 
-	// 创建新 session
-	session, err := ctxpkg.NewSession(&ctxpkg.SessionConfig{
-		SystemPrompt: systemPrompt,
-		MaxL1Pages:   10,
-		Compressor:   ctxpkg.NewMockCompressor(1024), // 使用 mock 压缩器
-		Cfg:          a.config,
-	})
-	if err != nil {
-		a.logger.Error("Failed to create new session", "error", err)
-		return
+	case config.ProviderAzure:
+		return azure.New(
+			azure.WithBaseURL(cfg.AzureEndpoint),
+			azure.WithAPIKey(apiKey),
+			azure.WithAPIVersion(cfg.AzureAPIVersion),
+		)
+
+	case config.ProviderBedrock:
+		return bedrock.New()
+
+	case config.ProviderGoogle:
+		return google.New(
+			google.WithGeminiAPIKey(apiKey),
+		)
+
+	case config.ProviderOpenAICompat:
+		if cfg.BaseURL != "" {
+			return openaicompat.New(
+				openaicompat.WithBaseURL(cfg.BaseURL),
+				openaicompat.WithAPIKey(apiKey),
+			)
+		}
+		return openaicompat.New(
+			openaicompat.WithAPIKey(apiKey),
+		)
+
+	case config.ProviderQwen:
+		// Qwen (通义千问) 使用 DashScope API
+		// 注意：不设置 stream_options，因为压缩器使用非流式调用
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+		}
+		return openaicompat.New(
+			openaicompat.WithBaseURL(baseURL),
+			openaicompat.WithAPIKey(apiKey),
+		)
+
+	case config.ProviderDeepSeek:
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.deepseek.com"
+		}
+		return openaicompat.New(
+			openaicompat.WithBaseURL(baseURL),
+			openaicompat.WithAPIKey(apiKey),
+		)
+
+	case config.ProviderGLM:
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://open.bigmodel.cn/api/paas/v4"
+		}
+		return openaicompat.New(
+			openaicompat.WithBaseURL(baseURL),
+			openaicompat.WithAPIKey(apiKey),
+		)
+
+	case config.ProviderOpenRouter:
+		return openrouter.New(
+			openrouter.WithAPIKey(apiKey),
+		)
+
+	case config.ProviderVercel:
+		return vercel.New(
+			vercel.WithAPIKey(apiKey),
+		)
+
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", cfg.Provider)
 	}
-
-	// 更新 Agent 和 ReActLoop 的 session 引用
-	a.session = session
-	a.reactLoop.SetSession(session)
-	a.logger.Info("History cleared, new session created", "session_id", session.ID)
 }
-
-
 
 // ChatWithToolsWithProgress 进行支持工具调用的对话（带进度更新）
 // 返回一个 channel 用于异步推送进度更新和完成信号
@@ -366,10 +421,15 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 
 		// 流式执行
 		for event := range a.reactLoop.Stream(ctx, userMessage) {
+			// 处理 error 类型：将 Error 转换为 Content
+			content := event.Content
+			if event.Type == "error" && event.Error != nil {
+				content = event.Error.Error()
+			}
 			select {
 			case ch <- ProgressUpdate{
 				Type:     event.Type,
-				Content:  event.Content,
+				Content:  content,
 				ToolName: event.ToolName,
 			}:
 			case <-ctx.Done():
@@ -379,48 +439,6 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 	}()
 
 	return ch
-}
-
-// CommitSession 提交当前 session 进行压缩
-// 应该在每轮交互完成后调用
-func (a *Agent) CommitSession(ctx context.Context) error {
-	if a.session == nil {
-		return nil
-	}
-	return a.session.Commit(ctx)
-}
-
-// AddMessageToSession 添加消息到 session
-func (a *Agent) AddMessageToSession(msg message.Message) {
-	if a.session == nil {
-		return
-	}
-	a.session.AddMessage(msg)
-}
-
-// GetContextMessages 获取上下文消息
-// 返回 session 构建的上下文
-func (a *Agent) GetContextMessages() []message.Message {
-	if a.session == nil {
-		return []message.Message{}
-	}
-	return a.session.GetContext()
-}
-
-// GetSessionStats 获取 session 统计信息
-func (a *Agent) GetSessionStats() ctxpkg.SessionStats {
-	if a.session == nil {
-		return ctxpkg.SessionStats{}
-	}
-	return a.session.GetStats()
-}
-
-// GetCurrentSessionID 获取当前 session ID
-func (a *Agent) GetCurrentSessionID() string {
-	if a.session == nil {
-		return ""
-	}
-	return a.session.ID
 }
 
 // Close 关闭 Agent，释放资源

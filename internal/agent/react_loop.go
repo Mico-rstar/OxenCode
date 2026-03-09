@@ -124,7 +124,7 @@ type StreamEvent struct {
 // Stream 流式执行 ReAct 循环
 func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[StreamEvent] {
 	return func(yield func(StreamEvent) bool) {
-		// 添加用户消息
+		// 添加用户消息（Session 会自动检查并触发压缩）
 		userMsg := message.NewMessage(message.RoleUser, userMessage)
 		r.session.AddMessage(userMsg)
 
@@ -136,16 +136,32 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 		for i := 0; i < maxIterations; i++ {
 			select {
 			case <-ctx.Done():
+				r.logger.Warn("Context cancelled", "error", ctx.Err())
 				yield(StreamEvent{Type: "error", Error: ctx.Err()})
 				return
 			default:
 			}
 
-			// 检查并压缩
-			r.checkAndCompress(ctx)
-
 			// 构建消息
 			messages := r.builder.Build(r.systemPrompt)
+
+			// Debug: 打印消息详情
+			r.logger.Debug("Built messages for LLM", "count", len(messages))
+			for i, msg := range messages {
+				hasToolCalls := false
+				hasToolResult := false
+				for _, part := range msg.Content {
+					switch part.(type) {
+					case fantasy.ToolCallPart:
+						hasToolCalls = true
+					case fantasy.ToolResultPart:
+						hasToolResult = true
+					}
+				}
+				if hasToolCalls || hasToolResult || msg.Role == fantasy.MessageRoleUser {
+					r.logger.Debug("Message detail", "index", i, "role", msg.Role, "has_tool_calls", hasToolCalls, "has_tool_result", hasToolResult)
+				}
+			}
 
 			// 快照：每次 LLM 调用前
 			r.snapshot(fmt.Sprintf("llm_call_iter_%d", i))
@@ -158,6 +174,7 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 				Tools:           r.buildToolDefinitions(),
 			})
 			if err != nil {
+				r.logger.Error("Failed to call LLM stream", "error", err)
 				yield(StreamEvent{Type: "error", Error: err})
 				return
 			}
@@ -170,6 +187,7 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 			for part := range stream {
 				// 处理错误
 				if part.Error != nil {
+					r.logger.Error("LLM stream error", "error", part.Error)
 					yield(StreamEvent{Type: "error", Error: part.Error})
 					return
 				}
@@ -230,16 +248,35 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 
 			// 处理流结束后仍有工具调用的情况
 			if len(toolCalls) > 0 {
+				// 创建 Assistant 消息，包含工具调用信息
+				assistantMsg := message.NewMessage(message.RoleAssistant, finalContent.String())
+				for _, tc := range toolCalls {
+					// 解析工具输入
+					var inputMap map[string]any
+					if tc.Input != "" {
+						if err := json.Unmarshal([]byte(tc.Input), &inputMap); err != nil {
+							r.logger.Warn("Failed to parse tool input", "tool", tc.ToolName, "error", err)
+							inputMap = make(map[string]any)
+						}
+					} else {
+						inputMap = make(map[string]any)
+					}
+					// 使用 LLM 返回的 ToolCallID，而不是生成新的
+					assistantMsg.AddToolCallWithID(tc.ToolCallID, tc.ToolName, inputMap)
+				}
+				r.session.AddMessage(assistantMsg)
+
 				// 执行工具
 				for _, tc := range toolCalls {
 					result, err := r.executor.Execute(ctx, tc)
 					if err != nil {
+						r.logger.Error("Tool execution failed", "tool", tc.ToolName, "error", err)
 						yield(StreamEvent{Type: "error", Error: err})
 						return
 					}
 
-					// 添加工具结果到 Session
-					toolMsg := message.NewMessage(message.RoleTool, result.Output)
+					// 添加工具结果到 Session（包含 tool_call_id）
+					toolMsg := message.NewToolResultMessage(tc.ToolCallID, result.Output)
 					r.session.AddMessage(toolMsg)
 
 					// 快照：工具执行后
@@ -252,15 +289,10 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 						return
 					}
 				}
-
-				// 检查分页
-				r.checkAndSplit()
-
-				// 快照：分页检查后
-				r.snapshot("after_split")
 			}
 		}
 
+		r.logger.Warn("Max iterations reached", "max", maxIterations)
 		yield(StreamEvent{Type: "error", Error: fmt.Errorf("max iterations reached")})
 	}
 }
@@ -304,38 +336,6 @@ func (r *ReActLoop) executeToolCall(ctx context.Context, tc fantasy.ToolCallCont
 	return nil
 }
 
-// checkAndCompress 检查并触发压缩
-func (r *ReActLoop) checkAndCompress(ctx context.Context) error {
-	threshold := r.getContextCheckThreshold()
-	currentTokens := r.session.GetStats().TotalL0Tokens + r.session.GetStats().TotalL1Tokens + r.session.GetStats().TotalL2Tokens
-
-	if currentTokens > threshold {
-		r.logger.Info("Context threshold reached, triggering compression",
-			"current", currentTokens,
-			"threshold", threshold)
-
-		// 触发压缩（当前实现为分页）
-		r.session.CheckAndSplit()
-	}
-
-	return nil
-}
-
-// checkAndSplit 检查并触发分页
-func (r *ReActLoop) checkAndSplit() {
-	threshold := r.getEmergencySplitThreshold()
-	stats := r.session.GetStats()
-	currentTokens := stats.TotalL0Tokens + stats.TotalL1Tokens + stats.TotalL2Tokens
-
-	if currentTokens > threshold {
-		r.logger.Warn("Emergency split threshold reached",
-			"current", currentTokens,
-			"threshold", threshold)
-
-		r.session.CheckAndSplit()
-	}
-}
-
 // buildToolDefinitions 构建工具定义
 func (r *ReActLoop) buildToolDefinitions() []fantasy.Tool {
 	toolList := r.registry.List()
@@ -362,18 +362,6 @@ func (r *ReActLoop) buildToolDefinitions() []fantasy.Tool {
 func (r *ReActLoop) getMaxIterations() int {
 	// TODO: 从 config 读取
 	return 50
-}
-
-// getContextCheckThreshold 获取上下文检查阈值
-func (r *ReActLoop) getContextCheckThreshold() int {
-	// TODO: 从 config 读取
-	return 80000
-}
-
-// getEmergencySplitThreshold 获取紧急分页阈值
-func (r *ReActLoop) getEmergencySplitThreshold() int {
-	// TODO: 从 config 读取
-	return 100000
 }
 
 // ptr 辅助函数：创建指针

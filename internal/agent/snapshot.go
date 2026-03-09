@@ -29,21 +29,23 @@ type SnapshotStats struct {
 	TotalL1Tokens int `json:"total_l1_tokens"`
 	TotalL2Tokens int `json:"total_l2_tokens"`
 	L1PageCount   int `json:"l1_page_count"`
-	L2PageCount   int `json:"l2_page_count"`
+	State         int `json:"state"`
 }
 
 // MessageSnapshot 消息快照
 type MessageSnapshot struct {
-	Index     int               `json:"index"`
-	Role      string            `json:"role"`
-	Content   string            `json:"content"`
-	Length    int               `json:"length"`
-	Truncated bool              `json:"truncated,omitempty"`
-	ToolCalls []ToolCallSnapshot `json:"tool_calls,omitempty"`
+	Index      int               `json:"index"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	Length     int               `json:"length"`
+	Truncated  bool              `json:"truncated,omitempty"`
+	ToolCalls  []ToolCallSnapshot `json:"tool_calls,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"` // 用于 tool 角色的消息
 }
 
 // ToolCallSnapshot 工具调用快照
 type ToolCallSnapshot struct {
+	ID    string         `json:"id,omitempty"`
 	Name  string         `json:"name"`
 	Input map[string]any `json:"input,omitempty"`
 }
@@ -126,7 +128,7 @@ func (sm *SnapshotManager) buildSnapshot(session *ctxpkg.Session, event string) 
 			TotalL1Tokens: stats.TotalL1Tokens,
 			TotalL2Tokens: stats.TotalL2Tokens,
 			L1PageCount:   stats.L1PageCount,
-			L2PageCount:   stats.L2PageCount,
+			State:         int(stats.State),
 		},
 		Messages:     make([]MessageSnapshot, 0, len(context)),
 		MessageCount: len(context),
@@ -136,10 +138,11 @@ func (sm *SnapshotManager) buildSnapshot(session *ctxpkg.Session, event string) 
 	// 构建完整的消息快照
 	for i, msg := range context {
 		msgSnap := MessageSnapshot{
-			Index:   i,
-			Role:    string(msg.Role),
-			Content: msg.Content,
-			Length:  len(msg.Content),
+			Index:      i,
+			Role:       string(msg.Role),
+			Content:    msg.Content,
+			Length:     len(msg.Content),
+			ToolCallID: msg.ToolCallID, // tool 消息的关联 ID
 		}
 
 		snapshot.CharCount += len(msg.Content)
@@ -155,6 +158,7 @@ func (sm *SnapshotManager) buildSnapshot(session *ctxpkg.Session, event string) 
 			for _, step := range msg.ReActLoop {
 				if step.ToolCall != nil {
 					msgSnap.ToolCalls = append(msgSnap.ToolCalls, ToolCallSnapshot{
+						ID:    step.ToolCall.ID,
 						Name:  step.ToolCall.Name,
 						Input: step.ToolCall.Input,
 					})
