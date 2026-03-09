@@ -2,6 +2,8 @@ package context
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,33 +56,15 @@ type Session struct {
 	initialized bool `json:"-"`
 }
 
-// SessionConfig Session 配置
-type SessionConfig struct {
-	SystemPrompt string
-	ArchiveDir   string
-	Compressor   Compressor
-	Cfg          *config.Config // 配置引用
-}
-
-// DefaultSessionConfig 返回默认的 Session 配置
-func DefaultSessionConfig() *SessionConfig {
-	return &SessionConfig{
-		SystemPrompt: "You are a helpful AI programming assistant.",
-		ArchiveDir:   "",        // 使用默认归档目录
-		Compressor:   nil,       // 需要外部设置
-		Cfg:          nil,       // 需要外部设置
-	}
-}
-
 // NewSession 创建新的 Session
-func NewSession(sessionConfig *SessionConfig) (*Session, error) {
+// systemPrompt 由调用者传入，cfg 和 compressor 是必需的依赖
+func NewSession(systemPrompt string, cfg *config.Config, compressor Compressor) (*Session, error) {
 	log := logger.New("context/session")
 
-	if sessionConfig.Compressor == nil {
+	if compressor == nil {
 		panic("Compressor is required, cannot create Session without it")
 	}
 
-	cfg := sessionConfig.Cfg
 	if cfg == nil {
 		cfg = config.Get()
 	}
@@ -98,9 +82,15 @@ func NewSession(sessionConfig *SessionConfig) (*Session, error) {
 		maxContextTokens = 200000 // 默认值
 	}
 
+	// 确定归档目录：优先使用配置，否则使用默认值
+	archiveDir := cfg.ArchiveDir
+	if archiveDir == "" {
+		archiveDir = "~/.local/share/oxencode/archive"
+	}
+
 	session := &Session{
 		ID:               time.Now().Format("20060102-150405"),
-		SystemPrompt:     sessionConfig.SystemPrompt,
+		SystemPrompt:     systemPrompt,
 		L0Page:           nil, // 初始时没有 L0 page
 		L1Pages:          make([]*Page, 0),
 		L2Page:           nil, // 初始时没有 L2 page
@@ -113,20 +103,15 @@ func NewSession(sessionConfig *SessionConfig) (*Session, error) {
 		L0Strategy:       l0Strategy,
 		L1Strategy:       l1Strategy,
 		L2Strategy:       l2Strategy,
-		compressor:       sessionConfig.Compressor,
-		ArchiveDir:       sessionConfig.ArchiveDir,
+		compressor:       compressor,
+		ArchiveDir:       archiveDir,
 		logger:           log,
 		initialized:      true,
 	}
 
-	// 设置默认归档目录
-	if session.ArchiveDir == "" {
-		session.ArchiveDir = "~/.local/share/oxencode/archive"
-	}
-
 	// 创建并启动压缩工作器（用于L0）
 	workerConfig := DefaultCompressWorkerConfig()
-	session.compressWkr = NewCompressWorker(sessionConfig.Compressor, workerConfig)
+	session.compressWkr = NewCompressWorker(compressor, workerConfig)
 	go session.processCompressResults()
 
 	session.logger.Info("Session created", "id", session.ID, "max_context_tokens", session.MaxContextTokens)
@@ -256,14 +241,16 @@ func (s *Session) triggerCompressLocked() bool {
 }
 
 // forceCommitL2Locked 强制提交L2到L1（不检查阈值，用于紧急分页）
+// 整体提交，不会破坏原子性
 func (s *Session) forceCommitL2Locked() {
-	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
+	if s.L2Page == nil || len(s.L2Page.Atoms) == 0 {
 		return
 	}
 
-	// 创建L1 Page
+	// 创建L1 Page，整体转移 Atoms
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
-	l1Page.Messages = s.L2Page.Messages
+	l1Page.Atoms = s.L2Page.Atoms
+	l1Page.Messages = l1Page.BuildMessages()
 	l1Page.Preprocess()
 
 	// 添加到L1列表
@@ -272,7 +259,7 @@ func (s *Session) forceCommitL2Locked() {
 	// 创建新的空L2
 	s.L2Page = NewL2Page()
 
-	s.logger.Info("L2 force committed to L1", "messages", len(l1Page.Messages))
+	s.logger.Info("L2 force committed to L1", "atoms", len(l1Page.Atoms))
 }
 
 // getL1TokensLocked 获取L1的总token数（需要持有锁）
@@ -290,7 +277,7 @@ func (s *Session) checkAndCommitL2() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
+	if s.L2Page == nil || len(s.L2Page.Atoms) == 0 {
 		return
 	}
 
@@ -310,28 +297,32 @@ func (s *Session) checkAndCommitL2() {
 }
 
 // commitHalfL2Locked 提交一半L2到L1（需要持有锁）
+// 关键修改：按 Atom 边界分割，不切断任何原子序列
 func (s *Session) commitHalfL2Locked() {
-	if s.L2Page == nil || len(s.L2Page.Messages) < 2 {
+	if s.L2Page == nil || len(s.L2Page.Atoms) < 2 {
 		return
 	}
 
-	messages := s.L2Page.Messages
-	mid := len(messages) / 2
-	oldMessages := messages[:mid]
-	newMessages := messages[mid:]
+	atoms := s.L2Page.Atoms
+	mid := len(atoms) / 2
 
-	// 旧消息创建L1 Page
+	// 按 Atom 边界分割，不会破坏原子性
+	oldAtoms := atoms[:mid]
+	newAtoms := atoms[mid:]
+
+	// 旧原子创建L1 Page
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
-	l1Page.Messages = oldMessages
+	l1Page.Atoms = oldAtoms
+	l1Page.Messages = l1Page.BuildMessages()
 	l1Page.Preprocess()
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
 
-	// 新消息保留为L2
+	// 新原子保留为L2
 	newL2 := NewL2Page()
-	newL2.Messages = newMessages
+	newL2.Atoms = newAtoms
 	s.L2Page = newL2
 
-	s.logger.Info("L2 committed to L1", "old_messages", len(oldMessages), "new_messages", len(newMessages))
+	s.logger.Info("L2 committed to L1", "old_atoms", mid, "new_atoms", len(newAtoms))
 }
 
 // startL0CompressLocked 开始L0压缩（异步）（需要持有锁）
@@ -381,12 +372,12 @@ func (s *Session) startL0CompressLocked() {
 
 // Commit 提交当前 L2 page，创建 L1 page 并预处理
 // 用于一轮交互结束后的显式提交
-// 注意：此方法不会阻塞等待 L1 压缩完成，以确保主流程不被阻塞
+// 整体提交，不会破坏原子性
 func (s *Session) Commit(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
+	if s.L2Page == nil || len(s.L2Page.Atoms) == 0 {
 		return nil // 没有需要提交的
 	}
 
@@ -395,9 +386,10 @@ func (s *Session) Commit(ctx context.Context) error {
 		s.logger.Warn("Failed to archive L2 page", "error", err)
 	}
 
-	// 创建新的 L1 page
+	// 创建新的 L1 page，整体转移 Atoms
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
-	l1Page.Messages = s.L2Page.Messages
+	l1Page.Atoms = s.L2Page.Atoms
+	l1Page.Messages = l1Page.BuildMessages()
 
 	// L1预处理（截断，不调用LLM）
 	l1Page.Preprocess()
@@ -417,7 +409,7 @@ func (s *Session) Commit(ctx context.Context) error {
 	// 替换当前的 L2 page 为新的空 page
 	s.L2Page = NewL2Page()
 
-	s.logger.Info("Session committed", "l1_page_id", l1Page.ID)
+	s.logger.Info("Session committed", "l1_page_id", l1Page.ID, "atoms", len(l1Page.Atoms))
 	return nil
 }
 
@@ -444,21 +436,48 @@ func (s *Session) GetContext() []message.Message {
 	// 注意：保留原始消息结构，而不是渲染成文本，以保持 tool_calls 和 tool 结果的正确关联
 	for i := len(s.L1Pages) - 1; i >= 0; i-- {
 		p := s.L1Pages[i]
-		// 使用 ProcessedMessages（如果已预处理），否则使用原始 Messages
-		msgs := p.Messages
-		if p.ProcessedMessages != nil {
-			msgs = p.ProcessedMessages
+		// 使用 ProcessedMessages（如果已预处理），否则使用 BuildMessages
+		msgs := p.ProcessedMessages
+		if msgs == nil {
+			msgs = p.BuildMessages()
 		}
 		messages = append(messages, msgs...)
 	}
 
-	// 4. 添加 L2 page
+	// 4. 添加 L2 page（使用 BuildMessages 从 Atoms 构建）
 	if s.L2Page != nil {
-		messages = append(messages, s.L2Page.Messages...)
+		messages = append(messages, s.L2Page.BuildMessages()...)
 	}
 
 	s.logger.Debug("Context built", "total_messages", len(messages), "l1_count", len(s.L1Pages))
+
+	// 调试：写入上下文窗口到文件
+	s.writeContextDebugFile(messages)
+
 	return messages
+}
+
+// writeContextDebugFile 写入上下文窗口到调试文件
+func (s *Session) writeContextDebugFile(messages []message.Message) {
+	debugFile := "/tmp/oxencode_context_debug.txt"
+
+	var sb strings.Builder
+	for _, msg := range messages {
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n")
+	}
+
+	if err := os.WriteFile(debugFile, []byte(sb.String()), 0644); err != nil {
+		s.logger.Warn("Failed to write context debug file", "error", err)
+	}
+}
+
+// truncateString 截断字符串
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // processCompressResults 处理压缩结果
@@ -584,12 +603,12 @@ func (s *Session) calculateTotalTokensLocked() int {
 }
 
 // ForceCommit 强制提交当前 L2（用于紧急分页）
-// 注意：此方法不会阻塞等待 L1 压缩完成
+// 整体提交，不会破坏原子性
 func (s *Session) ForceCommit(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.L2Page == nil || len(s.L2Page.Messages) == 0 {
+	if s.L2Page == nil || len(s.L2Page.Atoms) == 0 {
 		return nil
 	}
 
@@ -598,9 +617,10 @@ func (s *Session) ForceCommit(ctx context.Context) error {
 		s.logger.Warn("Failed to archive L2 page", "error", err)
 	}
 
-	// 创建 L1
+	// 创建 L1，整体转移 Atoms
 	l1Page := NewPage(PageTypeL1, s.L1Strategy)
-	l1Page.Messages = s.L2Page.Messages
+	l1Page.Atoms = s.L2Page.Atoms
+	l1Page.Messages = l1Page.BuildMessages()
 	l1Page.Preprocess()
 
 	s.L1Pages = append([]*Page{l1Page}, s.L1Pages...)
@@ -616,7 +636,7 @@ func (s *Session) ForceCommit(ctx context.Context) error {
 	// 新 L2
 	s.L2Page = NewL2Page()
 
-	s.logger.Info("Session force committed")
+	s.logger.Info("Session force committed", "atoms", len(l1Page.Atoms))
 	return nil
 }
 
