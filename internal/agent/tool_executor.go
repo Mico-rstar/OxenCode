@@ -79,7 +79,6 @@ func (e *ToolExecutor) Execute(ctx context.Context, tc fantasy.ToolCallContent) 
 	// 5. 关键：截断输出
 	output = e.truncateOutput(output, tc.ToolName)
 
-	e.logger.Info("Tool executed successfully", "tool", tc.ToolName, "outputLength", len(output))
 
 	return &ToolResult{
 		Output:  output,

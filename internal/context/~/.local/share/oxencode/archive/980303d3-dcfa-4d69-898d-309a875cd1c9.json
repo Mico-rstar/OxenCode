@@ -1,0 +1,10 @@
+[
+  {
+    "id": "572ba75c-750c-498f-a3dd-d412accc2ded",
+    "role": "user",
+    "content": "test",
+    "status": "completed",
+    "timestamp": "2026-03-09T12:36:10.724247214+08:00",
+    "is_streaming": false
+  }
+]

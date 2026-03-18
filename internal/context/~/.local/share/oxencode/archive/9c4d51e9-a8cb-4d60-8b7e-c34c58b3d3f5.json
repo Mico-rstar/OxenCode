@@ -1,0 +1,18 @@
+[
+  {
+    "id": "dc67c486-2a68-4f6f-8ae3-d0386350deb3",
+    "role": "user",
+    "content": "这是第 4 条用户消息，用于测试L0压缩功能。我们需要添加足够多的内容来触发压缩。",
+    "status": "completed",
+    "timestamp": "2026-03-09T11:31:12.496644283+08:00",
+    "is_streaming": false
+  },
+  {
+    "id": "59b00e13-fa70-4585-a101-97fbcebd1a6b",
+    "role": "assistant",
+    "content": "这是第 4 条助手回复。我正在测试上下文管理系统的压缩功能。这个系统应该能够在消息过多时自动进行压缩。",
+    "status": "completed",
+    "timestamp": "2026-03-09T11:31:12.496645425+08:00",
+    "is_streaming": false
+  }
+]

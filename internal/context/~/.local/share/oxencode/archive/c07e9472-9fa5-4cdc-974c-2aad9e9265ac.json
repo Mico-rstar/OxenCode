@@ -1,0 +1,18 @@
+[
+  {
+    "id": "57a34c2c-5fd3-481d-b453-4977e7dccb96",
+    "role": "user",
+    "content": "L2-Msg2-User",
+    "status": "completed",
+    "timestamp": "2026-03-08T23:02:04.924383477+08:00",
+    "is_streaming": false
+  },
+  {
+    "id": "f03810ba-0414-4d70-af9a-e3b0b03d1582",
+    "role": "assistant",
+    "content": "L2-Msg2-Assistant",
+    "status": "completed",
+    "timestamp": "2026-03-08T23:02:04.924386246+08:00",
+    "is_streaming": false
+  }
+]

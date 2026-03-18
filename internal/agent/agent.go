@@ -374,48 +374,14 @@ func (a *Agent) ChatWithToolsWithProgress(ctx context.Context, userMessage strin
 		// 初始快照
 		a.TakeSnapshot("start")
 
-		// 设置回调
+		// 设置快照回调（仅用于快照，不用于事件传递）
 		a.reactLoop.SetCallbacks(&Callbacks{
-			OnThought: func(text string) {
-				select {
-				case ch <- ProgressUpdate{Type: "thought", Content: text}:
-				case <-ctx.Done():
-				}
-			},
-			OnAction: func(toolName, input string) {
-				// 工具调用时拍摄快照
-				a.TakeSnapshot("tool_" + toolName)
-				select {
-				case ch <- ProgressUpdate{Type: "action", Content: input, ToolName: toolName}:
-				case <-ctx.Done():
-				}
-			},
-			OnObservation: func(toolName, output string) {
-				// 工具结果返回后拍摄快照
-				a.TakeSnapshot("result_" + toolName)
-				select {
-				case ch <- ProgressUpdate{Type: "observation", Content: output, ToolName: toolName}:
-				case <-ctx.Done():
-				}
-			},
-			OnContent: func(text string) {
-				select {
-				case ch <- ProgressUpdate{Type: "content", Content: text}:
-				case <-ctx.Done():
-				}
-			},
-			OnError: func(err error) {
-				select {
-				case ch <- ProgressUpdate{Type: "error", Content: err.Error()}:
-				case <-ctx.Done():
-				}
-			},
 			OnSnapshot: func(event string) {
 				a.TakeSnapshot(event)
 			},
 		})
 
-		// 流式执行
+		// 流式执行（仅通过迭代器接收事件）
 		for event := range a.reactLoop.Stream(ctx, userMessage) {
 			// 处理 error 类型：将 Error 转换为 Content
 			content := event.Content

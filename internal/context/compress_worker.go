@@ -7,20 +7,18 @@ import (
 	"time"
 
 	"github.com/yourname/oxencode/internal/message"
-	"github.com/yourname/oxencode/pkg/logger"
 )
 
 // CompressWorker 压缩工作器
 // 负责管理压缩任务队列和执行压缩
 type CompressWorker struct {
-	queue      chan *CompressTask
-	resultChan chan *CompressResult
+	queue       chan *CompressTask
+	resultChan  chan *CompressResult
 	workerCount int
-	wg         sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
-	compressor Compressor
-	logger     logger.Logger
+	wg          sync.WaitGroup
+	ctx         context.Context
+	cancel      context.CancelFunc
+	compressor  Compressor
 }
 
 // CompressTask 压缩任务
@@ -57,13 +55,12 @@ func NewCompressWorker(compressor Compressor, config *CompressWorkerConfig) *Com
 	ctx, cancel := context.WithCancel(context.Background())
 
 	worker := &CompressWorker{
-		queue:      make(chan *CompressTask, config.QueueSize),
-		resultChan: make(chan *CompressResult, config.QueueSize),
+		queue:       make(chan *CompressTask, config.QueueSize),
+		resultChan:  make(chan *CompressResult, config.QueueSize),
 		workerCount: config.WorkerCount,
-		ctx:        ctx,
-		cancel:     cancel,
-		compressor: compressor,
-		logger:     logger.New("context/worker"),
+		ctx:         ctx,
+		cancel:      cancel,
+		compressor:  compressor,
 	}
 
 	// 启动工作器
@@ -74,8 +71,6 @@ func NewCompressWorker(compressor Compressor, config *CompressWorkerConfig) *Com
 
 // start 启动工作器
 func (w *CompressWorker) start() {
-	w.logger.Info("Starting compress workers", "count", w.workerCount)
-
 	for i := 0; i < w.workerCount; i++ {
 		w.wg.Add(1)
 		go w.workerLoop(i)
@@ -86,17 +81,13 @@ func (w *CompressWorker) start() {
 func (w *CompressWorker) workerLoop(id int) {
 	defer w.wg.Done()
 
-	w.logger.Debug("Worker started", "id", id)
-
 	for {
 		select {
 		case <-w.ctx.Done():
-			w.logger.Debug("Worker stopped", "id", id)
 			return
 
 		case task, ok := <-w.queue:
 			if !ok {
-				w.logger.Debug("Queue closed", "id", id)
 				return
 			}
 
@@ -107,13 +98,6 @@ func (w *CompressWorker) workerLoop(id int) {
 
 // processTask 处理压缩任务
 func (w *CompressWorker) processTask(task *CompressTask, workerID int) {
-	w.logger.Info("Processing compress task",
-		"worker_id", workerID,
-		"page_id", task.Page.ID,
-		"page_type", task.Page.Type,
-		"priority", task.Priority,
-	)
-
 	// 创建带超时的上下文
 	timeout := task.Page.Strategy.Timeout
 	if timeout == 0 {
@@ -143,9 +127,7 @@ func (w *CompressWorker) processTask(task *CompressTask, workerID int) {
 
 	select {
 	case w.resultChan <- result:
-		w.logger.Debug("Compress result sent", "page_id", task.Page.ID)
 	case <-w.ctx.Done():
-		w.logger.Debug("Context cancelled, result discarded", "page_id", task.Page.ID)
 	}
 }
 
@@ -167,7 +149,6 @@ func (w *CompressWorker) Submit(page *Page, priority int) error {
 
 	select {
 	case w.queue <- task:
-		w.logger.Debug("Task submitted", "page_id", page.ID, "priority", priority)
 		return nil
 	case <-w.ctx.Done():
 		return fmt.Errorf("worker stopped")
@@ -183,12 +164,10 @@ func (w *CompressWorker) Results() <-chan *CompressResult {
 
 // Stop 停止工作器
 func (w *CompressWorker) Stop() {
-	w.logger.Info("Stopping compress workers")
 	w.cancel()
 	close(w.queue)
 	w.wg.Wait()
 	close(w.resultChan)
-	w.logger.Info("All workers stopped")
 }
 
 // Stats 返回工作器统计

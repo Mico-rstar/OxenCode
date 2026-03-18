@@ -62,7 +62,7 @@ compressor_model = "qwen3.5-plus"
 # model = "deepseek/deepseek-chat"
 
 # ====== 通用参数 ======
-max_tokens = 8192
+# max_tokens = 8192
 temperature = 0.7
 
 # ====== 工作目录 (可选) ======

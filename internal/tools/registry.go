@@ -183,9 +183,6 @@ func (r *Registry) Execute(ctx context.Context, name string, input map[string]an
 		}
 	}
 
-	r.logger.Info("Tool executed successfully",
-		"tool", name,
-		"outputLength", len(output))
 	return output, nil
 }
 

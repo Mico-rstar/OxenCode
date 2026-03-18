@@ -65,7 +65,6 @@ func (b *MessageBuilder) convertMessage(msg message.Message) fantasy.Message {
 		for _, step := range msg.ReActLoop {
 			if step.ToolCall != nil {
 				inputJSON, _ := json.Marshal(step.ToolCall.Input)
-				b.logger.Info("Adding tool call to assistant message", "tool_call_id", step.ToolCall.ID, "tool_name", step.ToolCall.Name)
 				parts = append(parts, fantasy.ToolCallPart{
 					ToolCallID: step.ToolCall.ID,
 					ToolName:   step.ToolCall.Name,
@@ -82,7 +81,6 @@ func (b *MessageBuilder) convertMessage(msg message.Message) fantasy.Message {
 	case message.RoleTool:
 		// 工具结果需要关联到对应的 tool_call_id
 		if msg.ToolCallID != "" {
-			b.logger.Info("Converting tool result", "tool_call_id", msg.ToolCallID, "content_len", len(msg.Content))
 			// 使用正确的 ToolResultPart 格式，role 应该是 MessageRoleTool
 			return fantasy.Message{
 				Role: fantasy.MessageRoleTool,

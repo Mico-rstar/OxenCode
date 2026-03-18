@@ -1,0 +1,10 @@
+[
+  {
+    "id": "ef7f65cf-99eb-4785-a94c-e50df6fa05f5",
+    "role": "user",
+    "content": "Message 0",
+    "status": "completed",
+    "timestamp": "2026-03-09T17:05:27.386046454+08:00",
+    "is_streaming": false
+  }
+]

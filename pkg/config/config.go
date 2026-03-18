@@ -155,7 +155,7 @@ func Load() (*Config, error) {
 	v.SetDefault("max_page_tokens", 10000)
 
 	// 上下文管理配置（百分比阈值）
-	v.SetDefault("max_context_tokens", 50000)    // 默认总上下文上限 150k
+	v.SetDefault("max_context_tokens", 75000)    // 默认总上下文上限 150k
 	v.SetDefault("hard_max_l0_percent", 0.1)      // L0 占 10%
 	v.SetDefault("hard_max_l1_percent", 0.6)      // L1 占 60%
 	v.SetDefault("soft_max_l1_ratio", 0.6)        // L1 软上限为硬上限的 60%

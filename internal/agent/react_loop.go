@@ -240,7 +240,8 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 							r.logger.Warn("Failed to commit session", "error", err)
 						}
 
-						yield(StreamEvent{Type: "done", Content: finalContent.String()})
+						// done 事件不携带内容，调用者已通过流式 content 收到所有内容
+						yield(StreamEvent{Type: "done"})
 						return
 					}
 				}

@@ -115,7 +115,6 @@ func NewSession(systemPrompt string, cfg *config.Config, compressor Compressor) 
 	session.compressWkr = NewCompressWorker(compressor, workerConfig)
 	go session.processCompressResults()
 
-	session.logger.Info("Session created", "id", session.ID, "max_context_tokens", session.MaxContextTokens)
 	return session, nil
 }
 
@@ -180,8 +179,6 @@ func (s *Session) AddAtom(atom *message.AtomSequence) error {
 	}
 
 	s.mu.Unlock()
-
-	s.logger.Debug("Atom added", "atom_id", atom.ID, "has_tool_calls", atom.HasToolCalls())
 	return nil
 }
 
@@ -214,7 +211,6 @@ func (s *Session) waitForCompressComplete() {
 	timeout := time.Duration(s.cfg.CompressTimeout) * time.Second
 	select {
 	case <-s.compressDone:
-		s.logger.Debug("Compression completed, resuming")
 	case <-time.After(timeout):
 		s.logger.Warn("Compress wait timeout", "timeout", timeout)
 	}
@@ -405,7 +401,6 @@ func (s *Session) Commit(ctx context.Context) error {
 	// 替换当前的 L2 page 为新的空 page
 	s.L2Page = NewL2Page()
 
-	s.logger.Info("Session committed", "l1_page_id", l1Page.ID, "atoms", len(l1Page.Atoms))
 	return nil
 }
 
@@ -445,8 +440,6 @@ func (s *Session) GetContext() []message.Message {
 		messages = append(messages, s.L2Page.BuildMessages()...)
 	}
 
-	s.logger.Debug("Context built", "total_messages", len(messages), "l1_count", len(s.L1Pages))
-
 	// 调试：写入上下文窗口到文件
 	s.writeContextDebugFile(messages)
 
@@ -480,8 +473,6 @@ func (s *Session) processCompressResults() {
 			s.mu.Unlock()
 			continue
 		}
-
-		s.logger.Info("Compress result received", "page_id", result.PageID)
 
 		// 更新L0 page
 		s.L0Page = NewPage(PageTypeL0, s.L0Strategy)
@@ -564,7 +555,6 @@ func (s *Session) Close() {
 		s.compressWkr.Stop()
 	}
 	close(s.compressDone)
-	s.logger.Info("Session closed", "id", s.ID)
 }
 
 // GetTotalTokenCount 获取当前总 token 数
@@ -624,7 +614,6 @@ func (s *Session) ForceCommit(ctx context.Context) error {
 	// 新 L2
 	s.L2Page = NewL2Page()
 
-	s.logger.Info("Session force committed", "atoms", len(l1Page.Atoms))
 	return nil
 }
 
