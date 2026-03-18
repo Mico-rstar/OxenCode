@@ -411,6 +411,59 @@ func (a *Agent) Close() {
 	a.logger.Info("Agent closed")
 }
 
+// ClearSession 清空当前会话的对话历史
+// 保留会话 ID 和配置，只清除对话内容
+func (a *Agent) ClearSession() {
+	if a.session != nil {
+		a.session.Clear()
+		a.logger.Info("Session cleared", "session_id", a.session.ID)
+	}
+}
+
+// NewSession 创建新的会话
+// 关闭当前会话并创建新会话
+func (a *Agent) NewSession() error {
+	// 关闭当前会话
+	if a.session != nil {
+		a.session.Close()
+	}
+
+	// 创建新会话
+	systemPrompt := loadSystemPrompt(a.config, a.logger)
+
+	// 创建压缩器
+	apiKey := a.config.GetAPIKeyFromEnv()
+	compressorProvider, err := createCompressorProvider(a.config, apiKey)
+	if err != nil {
+		return fmt.Errorf("failed to create compressor provider: %w", err)
+	}
+	compressor, err := ctxpkg.NewLLMCompressorWithProvider(context.Background(), compressorProvider, a.config, a.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create LLM compressor: %w", err)
+	}
+
+	session, err := ctxpkg.NewSession(systemPrompt, a.config, compressor)
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	a.session = session
+
+	// 更新 ReActLoop 的 session
+	a.reactLoop.session = session
+
+	a.logger.Info("New session created", "session_id", session.ID)
+	return nil
+}
+
+// GetSessionID 获取当前会话 ID
+func (a *Agent) GetSessionID() string {
+	if a.session != nil {
+		return a.session.ID
+	}
+	return ""
+}
+
 // SearchArchive 搜索归档消息
 func (a *Agent) SearchArchive(query string, limit int) ([]ctxarchive.ArchiveEntry, error) {
 	// 简化版本返回空结果

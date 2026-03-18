@@ -10,14 +10,17 @@ import (
 
 	"github.com/peterh/liner"
 	"github.com/yourname/oxencode/internal/agent"
+	"github.com/yourname/oxencode/internal/cli/commands"
+	"github.com/yourname/oxencode/internal/cli/slashcmd"
 	"github.com/yourname/oxencode/pkg/config"
 )
 
 // CLI 简单命令行界面
 type CLI struct {
-	agent  *agent.Agent
-	liner  *liner.State
-	writer io.Writer
+	agent     *agent.Agent
+	liner     *liner.State
+	writer    io.Writer
+	registry  *CommandRegistry
 }
 
 // New 创建新的 CLI 实例
@@ -28,20 +31,35 @@ func New(cfg *config.Config) (*CLI, error) {
 		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
 
-	return &CLI{
-		agent:  ag,
-		liner:  liner.NewLiner(),
-		writer: os.Stdout,
-	}, nil
+	// 创建命令注册表
+	registry := NewCommandRegistry()
+
+	cli := &CLI{
+		agent:    ag,
+		liner:    liner.NewLiner(),
+		writer:   os.Stdout,
+		registry: registry,
+	}
+
+	// 注册内置命令
+	cli.registerCommands()
+
+	return cli, nil
+}
+
+// registerCommands 注册所有内置命令
+func (c *CLI) registerCommands() {
+	// 注册基础命令
+	c.registry.Register(commands.NewClearCommand())
+	c.registry.Register(commands.NewNewCommand())
+	c.registry.Register(commands.NewHelpCommand(c.registry))
 }
 
 // Run 启动 REPL 循环
 func (c *CLI) Run(ctx context.Context) error {
 	defer c.liner.Close()
 
-	fmt.Fprintln(c.writer, "OxenCode Simple CLI")
-	fmt.Fprintln(c.writer, "Type 'exit' or 'quit' to exit")
-	fmt.Fprintln(c.writer, "")
+	c.printWelcome()
 
 	// 设置 liner 选项
 	c.liner.SetCtrlCAborts(true) // Ctrl+C 返回 io.EOF
@@ -91,9 +109,56 @@ func (c *CLI) Run(ctx context.Context) error {
 				return nil
 			}
 
+			// 处理斜杠命令
+			if strings.HasPrefix(input, "/") {
+				c.handleSlashCommand(ctx, input)
+				continue
+			}
+
 			// 处理消息
 			c.processMessage(ctx, input)
 		}
+	}
+}
+
+// printWelcome 打印欢迎信息
+func (c *CLI) printWelcome() {
+	fmt.Fprintln(c.writer, "OxenCode Simple CLI")
+	fmt.Fprintln(c.writer, "Type 'exit' or 'quit' to exit")
+	fmt.Fprintln(c.writer, "Type '/help' to see available commands")
+	fmt.Fprintln(c.writer, "")
+}
+
+// handleSlashCommand 处理斜杠命令
+func (c *CLI) handleSlashCommand(ctx context.Context, input string) {
+	// 去除前导斜杠
+	input = strings.TrimPrefix(input, "/")
+
+	// 分离命令名称和参数
+	parts := strings.SplitN(input, " ", 2)
+	cmdName := parts[0]
+	args := ""
+	if len(parts) > 1 {
+		args = strings.TrimSpace(parts[1])
+	}
+
+	// 查找命令
+	cmd := c.registry.Get(cmdName)
+	if cmd == nil {
+		fmt.Fprintf(c.writer, "Unknown command: /%s\n", cmdName)
+		fmt.Fprintln(c.writer, "Type '/help' to see available commands")
+		return
+	}
+
+	// 执行命令
+	output, err := cmd.Execute(ctx, c, args)
+	if err != nil {
+		fmt.Fprintf(c.writer, "Error: %s\n", err.Error())
+		return
+	}
+
+	if output != "" {
+		fmt.Fprintln(c.writer, output)
 	}
 }
 
@@ -238,3 +303,29 @@ func (c *CLI) Close() {
 		c.agent.Close()
 	}
 }
+
+// ClearSession 清空当前会话（实现 CommandContext 接口）
+func (c *CLI) ClearSession() {
+	if c.agent != nil {
+		c.agent.ClearSession()
+	}
+}
+
+// NewSession 创建新会话（实现 CommandContext 接口）
+func (c *CLI) NewSession() error {
+	if c.agent != nil {
+		return c.agent.NewSession()
+	}
+	return nil
+}
+
+// GetSessionID 获取当前会话 ID（实现 CommandContext 接口）
+func (c *CLI) GetSessionID() string {
+	if c.agent != nil {
+		return c.agent.GetSessionID()
+	}
+	return ""
+}
+
+// Ensure CLI implements CommandContext
+var _ slashcmd.CommandContext = (*CLI)(nil)

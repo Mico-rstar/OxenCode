@@ -549,6 +549,24 @@ type SessionStats struct {
 	State         SessionState  `json:"state"`
 }
 
+// Clear 清空会话内容（保留会话 ID 和配置）
+// 用于 /clear 命令
+func (s *Session) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 重置所有页面
+	s.L0Page = nil
+	s.L1Pages = make([]*Page, 0)
+	s.L2Page = NewL2Page()
+
+	// 重置压缩状态
+	s.State = StateNormal
+	s.CompressingPages = make([]string, 0)
+
+	s.logger.Info("Session cleared", "session_id", s.ID)
+}
+
 // Close 关闭 Session
 func (s *Session) Close() {
 	if s.compressWkr != nil {
