@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -185,27 +186,22 @@ func (s *Session) AddAtom(atom *message.AtomSequence) error {
 }
 
 // AddMessage 添加消息到 Session（添加到 L2 Page）
-// 实现写屏障：当总上下文超过硬上限时，阻塞等待压缩完成
 // 注意：此方法保留向后兼容，内部创建单消息原子
 func (s *Session) AddMessage(msg message.Message) error {
 	atom := message.NewAtomSequence()
-	if msg.Role == message.RoleAssistant {
+	switch(msg.Role) {
+	case message.RoleAssistant:
 		atom.SetAssistant(msg)
-	} else if msg.Role == message.RoleUser {
+	case message.RoleUser:
 		atom.SetUserMessage(msg)
-	} else if msg.Role == message.RoleTool {
-		// Tool 消息不能单独添加，需要通过 AddAtom
-		s.logger.Warn("Tool message should be added via AddAtom, creating standalone atom")
-		// 创建一个只包含 tool result 的原子（不推荐，但保持兼容）
-		atom.AddToolResult(msg)
+	case message.RoleTool:
+		s.logger.Error("Tool message should be added via AddAtom, creating standalone atom")
+		return errors.New("Tool message should be added via AddAtom, creating standalone atom")
+	default:
+		s.logger.Error("Unknown messages, ignored by AddMessage method")
+		return errors.New("Unknown messages, ignored by AddMessage method")
 	}
 	return s.AddAtom(atom)
-}
-
-// estimateMessageTokens 估算消息的token数
-func estimateMessageTokens(msg message.Message) int {
-	// 简单估算：每4个字符约1个token
-	return len(msg.Content) / 4
 }
 
 // isInCompressingLocked 检查是否处于压缩状态（需要持有锁）
@@ -470,14 +466,6 @@ func (s *Session) writeContextDebugFile(messages []message.Message) {
 	if err := os.WriteFile(debugFile, []byte(sb.String()), 0644); err != nil {
 		s.logger.Warn("Failed to write context debug file", "error", err)
 	}
-}
-
-// truncateString 截断字符串
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // processCompressResults 处理压缩结果
