@@ -37,6 +37,7 @@ vendor/
 # Debug files
 debug
 debug.test
+debug.log
 
 # Environment files
 .env
