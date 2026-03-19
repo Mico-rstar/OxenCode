@@ -1,6 +1,7 @@
 package message
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -195,6 +196,66 @@ func (m *Message) SetError(err error) {
 // GenerateID 生成唯一ID (使用UUID)
 func GenerateID() string {
 	return uuid.New().String()
+}
+
+// ============================================
+// SystemReminder - 系统提示消息
+// ============================================
+
+// SystemReminderType 系统提示类型
+type SystemReminderType string
+
+const (
+	SystemReminderMemoryHint SystemReminderType = "memory_hint" // 记忆提示
+	SystemReminderError      SystemReminderType = "error"       // 错误提示
+	SystemReminderWarning    SystemReminderType = "warning"     // 警告提示
+)
+
+// SystemReminder 系统提示消息
+// 用于向Agent注入上下文提示，渲染为role:User的消息
+type SystemReminder struct {
+	Type    SystemReminderType `json:"type"`    // 提示类型
+	Content string             `json:"content"` // 主要内容
+	Hint    string             `json:"hint"`    // 可选的简短提示
+}
+
+// Render 渲染SystemReminder为消息字符串
+func (sr *SystemReminder) Render() string {
+	var sb strings.Builder
+	sb.WriteString("<system_reminder type=\"")
+	sb.WriteString(string(sr.Type))
+	sb.WriteString("\">\n")
+
+	if sr.Content != "" {
+		sb.WriteString(sr.Content)
+	}
+
+	if sr.Hint != "" {
+		sb.WriteString("\n提示：")
+		sb.WriteString(sr.Hint)
+	}
+
+	// 根据类型添加引导语
+	switch sr.Type {
+	case SystemReminderMemoryHint:
+		sb.WriteString("\n如果需要，可以使用 search_memory 工具搜索相关内容。\n")
+	}
+
+	sb.WriteString("</system_reminder>")
+	return sb.String()
+}
+
+// ToMessage 将SystemReminder转换为Message
+// 渲染为role:User的消息
+func (sr *SystemReminder) ToMessage() Message {
+	return Message{
+		ID:        GenerateID(),
+		Role:      RoleUser,
+		Content:   sr.Render(),
+		Status:    StatusCompleted,
+		Timestamp: time.Now(),
+		ReActLoop: []ReActStep{},
+	}
 }
 
 // ============================================

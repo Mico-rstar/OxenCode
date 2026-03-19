@@ -635,3 +635,16 @@ func (s *Session) ForceCommit(ctx context.Context) error {
 	return nil
 }
 
+// AddSystemReminder 添加系统提示消息
+// SystemReminder会被渲染为role:User的消息，注入到上下文中
+func (s *Session) AddSystemReminder(reminder message.SystemReminder) error {
+	// 将SystemReminder转换为Message
+	reminderMsg := reminder.ToMessage()
+
+	// 创建原子序列
+	atom := message.NewAtomSequence()
+	atom.SetUserMessage(reminderMsg)
+
+	return s.AddAtom(atom)
+}
+

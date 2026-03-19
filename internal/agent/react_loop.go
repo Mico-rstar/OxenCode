@@ -13,16 +13,18 @@ import (
 	"github.com/yourname/oxencode/internal/tools"
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/memory"
 )
 
 // ReActLoop 自实现的 ReAct 循环
 // 完全控制消息流，实现与 Session 的深度集成
 type ReActLoop struct {
 	// 核心依赖
-	model    fantasy.LanguageModel // 复用 fantasy 的模型接口
-	session  *ctxpkg.Session       // 上下文管理
-	registry *tools.Registry       // 工具注册表
-	env      tools.Environment     // 执行环境
+	model        fantasy.LanguageModel // 复用 fantasy 的模型接口
+	session      *ctxpkg.Session       // 上下文管理
+	registry     *tools.Registry       // 工具注册表
+	env          tools.Environment     // 执行环境
+	memoryClient *memory.Client        // 记忆服务客户端（可选）
 
 	// 配置
 	cfg    *config.Config
@@ -62,6 +64,7 @@ type ReActLoopConfig struct {
 	Config       *config.Config
 	Logger       logger.Logger
 	SystemPrompt string
+	MemoryClient *memory.Client // 记忆服务客户端（可选）
 }
 
 // NewReActLoop 创建 ReAct 循环
@@ -74,6 +77,7 @@ func NewReActLoop(cfg *ReActLoopConfig) *ReActLoop {
 		session:      cfg.Session,
 		registry:     cfg.Registry,
 		env:          cfg.Env,
+		memoryClient: cfg.MemoryClient,
 		cfg:          cfg.Config,
 		logger:       cfg.Logger,
 		builder:      builder,
@@ -124,6 +128,26 @@ type StreamEvent struct {
 // Stream 流式执行 ReAct 循环
 func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[StreamEvent] {
 	return func(yield func(StreamEvent) bool) {
+		// 1. 调用trigger_memory快速判断是否有相关记忆
+		if r.memoryClient != nil && r.cfg.MemoryEnabled {
+			triggerResp, err := r.memoryClient.TriggerMemory(ctx, userMessage)
+			if err != nil {
+				r.logger.Warn("TriggerMemory failed", "error", err)
+			} else if triggerResp.HasRelevant {
+				// 注入SystemReminder提示Agent
+				reminder := message.SystemReminder{
+					Type:    message.SystemReminderMemoryHint,
+					Content: "检测到可能存在相关记忆",
+					Hint:    triggerResp.Hint,
+				}
+				if err := r.session.AddSystemReminder(reminder); err != nil {
+					r.logger.Warn("Failed to add system reminder", "error", err)
+				} else {
+					r.logger.Info("Memory hint injected", "hint", triggerResp.Hint)
+				}
+			}
+		}
+
 		// 添加用户消息（Session 会自动检查并触发压缩）
 		userMsg := message.NewMessage(message.RoleUser, userMessage)
 		r.session.AddMessage(userMsg)

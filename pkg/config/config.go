@@ -92,6 +92,11 @@ type Config struct {
 
 	// Session 配置
 	ArchiveDir string `mapstructure:"archive_dir"` // 归档目录
+
+	// Memory Service 配置
+	MemoryServiceURL string `mapstructure:"memory_service_url"` // 记忆服务URL，默认 "http://127.0.0.1:8765"
+	MemoryDir        string `mapstructure:"memory_dir"`         // memory目录路径
+	MemoryEnabled    bool   `mapstructure:"memory_enabled"`     // 是否启用记忆服务
 }
 
 var cfg *Config
@@ -162,6 +167,11 @@ func Load() (*Config, error) {
 	v.SetDefault("hard_max_l2_percent", 0.3)      // L2 占 30%
 	v.SetDefault("soft_max_l2_ratio", 0.7)        // L2 软上限为硬上限的 70%
 	v.SetDefault("compress_timeout", 30)          // 压缩超时 60 秒
+
+	// Memory Service 默认配置
+	v.SetDefault("memory_service_url", "http://127.0.0.1:8765")
+	v.SetDefault("memory_dir", "")
+	v.SetDefault("memory_enabled", false)
 
 	// 尝试读取用户配置文件
 	configExists := true

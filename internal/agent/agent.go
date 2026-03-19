@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"charm.land/fantasy"
@@ -18,19 +21,22 @@ import (
 
 	ctxpkg "github.com/yourname/oxencode/internal/context"
 	ctxarchive "github.com/yourname/oxencode/internal/context/archive"
+	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/internal/tools"
 	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/memory"
 	"github.com/yourname/oxencode/pkg/prompt"
 )
 
 // Agent AI Agent 核心结构
 type Agent struct {
 	// 核心组件
-	reactLoop *ReActLoop            // 自实现的 ReAct 循环
-	provider  fantasy.Provider      // fantasy Provider（多 Provider 支持）
-	model     fantasy.LanguageModel // fantasy LanguageModel
-	session   *ctxpkg.Session       // 上下文会话（直接持有）
+	reactLoop    *ReActLoop            // 自实现的 ReAct 循环
+	provider     fantasy.Provider      // fantasy Provider（多 Provider 支持）
+	model        fantasy.LanguageModel // fantasy LanguageModel
+	session      *ctxpkg.Session       // 上下文会话（直接持有）
+	memoryClient *memory.Client        // 记忆服务客户端（可选）
 
 	// 通用字段
 	config       *config.Config
@@ -112,6 +118,25 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	// 加载系统提示词
 	systemPrompt := loadSystemPrompt(cfg, log)
 
+	// 创建记忆服务客户端（如果启用）
+	var memoryClient *memory.Client
+	if cfg.MemoryEnabled {
+		memoryClient = memory.NewClient(memory.DefaultClientConfig(cfg.MemoryServiceURL))
+		log.Info("Memory service client created", "url", cfg.MemoryServiceURL)
+
+		// 检查记忆服务健康状态
+		if err := memoryClient.HealthCheck(context.Background()); err != nil {
+			log.Warn("Memory service health check failed", "error", err)
+		}
+
+		// 注册记忆工具
+		searchMemoryTool := tools.NewSearchMemoryTool(memoryClient, log)
+		loadMemoryTool := tools.NewLoadMemoryTool(memoryClient, log)
+		registry.Register(searchMemoryTool)
+		registry.Register(loadMemoryTool)
+		log.Info("Memory tools registered")
+	}
+
 	// 创建压缩器（仅用于L0）
 	// 注意：使用独立的 provider，不设置 stream_options 等流式专用配置
 	compressorProvider, err := createCompressorProvider(cfg, apiKey)
@@ -138,6 +163,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		Config:       cfg,
 		Logger:       log,
 		SystemPrompt: systemPrompt,
+		MemoryClient: memoryClient,
 	})
 
 	log.Info("Agent created", "session_id", session.ID)
@@ -147,6 +173,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		provider:     provider,
 		model:        model,
 		session:      session,
+		memoryClient: memoryClient,
 		config:       cfg,
 		toolRegistry: registry,
 		env:          env,
@@ -165,8 +192,44 @@ func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 		panic("System prompt not found")
 	}
 
-	log.Info("System prompt loaded", "source", promptDir, "length", len(p.SystemPrompt))
-	return p.SystemPrompt
+	systemPrompt := p.SystemPrompt
+
+	// 加载inner内容（如果记忆服务启用）
+	if cfg.MemoryEnabled && cfg.MemoryDir != "" {
+		innerContent := loadInnerContent(cfg.MemoryDir, log)
+		if innerContent != "" {
+			systemPrompt += "\n\n" + innerContent
+			log.Info("Inner content loaded", "memory_dir", cfg.MemoryDir)
+		}
+	}
+
+	log.Info("System prompt loaded", "source", promptDir, "length", len(systemPrompt))
+	return systemPrompt
+}
+
+// loadInnerContent 加载inner目录内容（self.md和user.md）
+func loadInnerContent(memoryDir string, log logger.Logger) string {
+	var content strings.Builder
+
+	// 加载 inner/self.md
+	selfPath := filepath.Join(memoryDir, "inner", "self.md")
+	if data, err := os.ReadFile(selfPath); err == nil && len(data) > 0 {
+		content.WriteString("<self_cognition>\n")
+		content.WriteString(string(data))
+		content.WriteString("\n</self_cognition>\n")
+		log.Debug("Loaded inner/self.md")
+	}
+
+	// 加载 inner/user.md
+	userPath := filepath.Join(memoryDir, "inner", "user.md")
+	if data, err := os.ReadFile(userPath); err == nil && len(data) > 0 {
+		content.WriteString("<user_preference>\n")
+		content.WriteString(string(data))
+		content.WriteString("\n</user_preference>\n")
+		log.Debug("Loaded inner/user.md")
+	}
+
+	return content.String()
 }
 
 // createProvider 根据 provider 类型创建对应的 provider
@@ -468,4 +531,57 @@ func (a *Agent) GetSessionID() string {
 func (a *Agent) SearchArchive(query string, limit int) ([]ctxarchive.ArchiveEntry, error) {
 	// 简化版本返回空结果
 	return []ctxarchive.ArchiveEntry{}, nil
+}
+
+// CommitSessionToMemory 将当前会话提交到记忆服务
+// 返回task_id用于追踪异步处理状态
+func (a *Agent) CommitSessionToMemory(ctx context.Context) (string, error) {
+	if !a.config.MemoryEnabled {
+		return "", fmt.Errorf("memory service not enabled")
+	}
+
+	if a.memoryClient == nil {
+		return "", fmt.Errorf("memory client not initialized")
+	}
+
+	// 获取session中的所有消息
+	messages := a.session.GetContext()
+	if len(messages) == 0 {
+		return "", fmt.Errorf("no messages to commit")
+	}
+
+	// 转换消息格式
+	memMessages := make([]memory.MessageSchema, 0, len(messages))
+	for _, msg := range messages {
+		// 跳过系统消息
+		if msg.Role == message.RoleSystem {
+			continue
+		}
+
+		memMsg := memory.MessageSchema{
+			Role:    string(msg.Role),
+			Content: msg.Content,
+		}
+		memMessages = append(memMessages, memMsg)
+	}
+
+	if len(memMessages) == 0 {
+		return "", fmt.Errorf("no user/assistant messages to commit")
+	}
+
+	sessionID := a.session.ID
+
+	resp, err := a.memoryClient.CommitSession(ctx, sessionID, memMessages)
+	if err != nil {
+		a.logger.Error("Failed to commit session to memory", "error", err)
+		return "", err
+	}
+
+	a.logger.Info("Session committed to memory", "session_id", sessionID, "task_id", resp.TaskID)
+	return resp.TaskID, nil
+}
+
+// IsMemoryEnabled 检查记忆服务是否启用
+func (a *Agent) IsMemoryEnabled() bool {
+	return a.config.MemoryEnabled && a.memoryClient != nil
 }
