@@ -61,7 +61,7 @@ Infrastructure Layer (File System / Config / History)
 
 ## Configuration
 
-Configuration loaded from `~/.config/oxencode/config.toml` with fallback to `config.example.toml`.
+Configuration loaded from `~/.oxencode/config.toml` with fallback to `config.example.toml`.
 
 Key settings:
 - `provider` - LLM provider (anthropic, openai, qwen, deepseek, etc.)

@@ -1,5 +1,5 @@
 # OxenCode 配置示例
-# 复制此文件到 ~/.config/oxencode/config.toml
+# 复制此文件到 ~/.oxencode/config.toml
 
 # ====== Provider 配置 ======
 # 可选值: anthropic, openai, azure, bedrock, google, openrouter, vercel, openaicompat

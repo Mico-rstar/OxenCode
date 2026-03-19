@@ -17,7 +17,7 @@ type Config struct {
 }
 ```
 
-**配置文件** (`~/.config/oxencode/config.toml`):
+**配置文件** (`~/.oxencode/config.toml`):
 ```toml
 prompt_dir = "internal/prompt"  # 默认值
 ```

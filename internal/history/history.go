@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/yourname/oxencode/pkg/paths"
 )
 
 // Session 对话会话
@@ -31,13 +33,8 @@ type Manager struct {
 
 // NewManager 创建历史记录管理器
 func NewManager() (*Manager, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	dataDir := filepath.Join(homeDir, ".local", "share", "oxencode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	dataDir := paths.HistoryDir()
+	if err := paths.EnsureDir(dataDir); err != nil {
 		return nil, err
 	}
 

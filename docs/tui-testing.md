@@ -54,7 +54,7 @@ export DEEPSEEK_API_KEY="your-deepseek-key"
 
 ### 创建配置文件（可选）
 
-创建 `~/.config/oxencode/config.toml`:
+创建 `~/.oxencode/config.toml`:
 
 ```toml
 provider = "anthropic"  # 或 "openai", "qwen", "deepseek" 等

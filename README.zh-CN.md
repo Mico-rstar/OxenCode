@@ -93,11 +93,11 @@ go install ./cmd/oxencode
 1. 复制示例配置：
 
 ```bash
-mkdir -p ~/.config/oxencode
-cp config.example.toml ~/.config/oxencode/config.toml
+mkdir -p ~/.oxencode
+cp config.example.toml ~/.oxencode/config.toml
 ```
 
-2. 编辑 `~/.config/oxencode/config.toml` 配置您的设置：
+2. 编辑 `~/.oxencode/config.toml` 配置您的设置：
 
 ```toml
 # 选择您的 provider

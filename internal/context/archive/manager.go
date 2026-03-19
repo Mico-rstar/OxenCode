@@ -11,6 +11,7 @@ import (
 
 	"github.com/yourname/oxencode/internal/message"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/paths"
 )
 
 // Manager 归档管理器
@@ -34,15 +35,11 @@ func NewManager(archiveDir string) (*Manager, error) {
 
 	// 使用默认目录或配置目录
 	if archiveDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get home directory: %w", err)
-		}
-		archiveDir = filepath.Join(homeDir, ".local", "share", "oxencode", "archive")
+		archiveDir = paths.ArchiveDir()
 	}
 
 	// 创建目录
-	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+	if err := paths.EnsureDir(archiveDir); err != nil {
 		return nil, fmt.Errorf("failed to create archive directory: %w", err)
 	}
 

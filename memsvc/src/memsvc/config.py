@@ -24,10 +24,10 @@ class Settings(BaseSettings):
 
     # Path configuration
     memory_dir: Path = Field(
-        default_factory=lambda: Path.home() / ".local" / "share" / "oxencode" / "memory"
+        default_factory=lambda: Path.home() / ".oxencode" / "memory"
     )
     data_dir: Path = Field(
-        default_factory=lambda: Path.home() / ".local" / "share" / "oxencode"
+        default_factory=lambda: Path.home() / ".oxencode"
     )
 
     # Watch configuration

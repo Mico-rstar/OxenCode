@@ -93,11 +93,11 @@ go install ./cmd/oxencode
 1. Copy the example configuration:
 
 ```bash
-mkdir -p ~/.config/oxencode
-cp config.example.toml ~/.config/oxencode/config.toml
+mkdir -p ~/.oxencode
+cp config.example.toml ~/.oxencode/config.toml
 ```
 
-2. Edit `~/.config/oxencode/config.toml` with your settings:
+2. Edit `~/.oxencode/config.toml` with your settings:
 
 ```toml
 # Choose your provider

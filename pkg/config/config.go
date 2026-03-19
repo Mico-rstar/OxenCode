@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/yourname/oxencode/pkg/logger"
+	"github.com/yourname/oxencode/pkg/paths"
 )
 
 // ProviderType AI 服务提供商类型
@@ -108,15 +109,13 @@ func Load() (*Config, error) {
 
 	v := viper.New()
 
-	// 设置配置文件路径
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Error("Failed to get home directory", "error", err)
+	// 初始化路径模块
+	if err := paths.Init(); err != nil {
+		log.Error("Failed to initialize paths", "error", err)
 		return nil, err
 	}
 
-	configDir := filepath.Join(homeDir, ".config", "oxencode")
-	configPath := filepath.Join(configDir, "config.toml")
+	configPath := paths.ConfigFile()
 
 	log.Debug("Config path", "path", configPath)
 
@@ -170,7 +169,7 @@ func Load() (*Config, error) {
 
 	// Memory Service 默认配置
 	v.SetDefault("memory_service_url", "http://127.0.0.1:8765")
-	v.SetDefault("memory_dir", "")
+	v.SetDefault("memory_dir", paths.MemoryDir())
 	v.SetDefault("memory_enabled", false)
 
 	// 尝试读取用户配置文件

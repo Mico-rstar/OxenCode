@@ -203,8 +203,8 @@ OxenCode 设计为单机 CLI 工具，直接在用户开发环境中运行：
 │  │  └─────────┘  └─────────┘  └──────────┘  │ │
 │  └───────────────────────────────────────────┘ │
 │                                                 │
-│  Configuration: ~/.config/oxencode/            │
-│  Cache/History: ~/.local/share/oxencode/       │
+│  Configuration: ~/.oxencode/                   │
+│  Cache/History: ~/.oxencode/                   │
 └─────────────────────────────────────────────────┘
                           │
                           ▼ HTTPS
