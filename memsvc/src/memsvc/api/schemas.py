@@ -156,3 +156,53 @@ class LoadMemoryResponse(BaseModel):
     """Response model for load_memory endpoint."""
 
     memories: list[MemoryContent]
+
+
+# === Session API Schemas ===
+
+
+class MessageSchema(BaseModel):
+    """A single message in a session."""
+
+    role: str
+    content: str
+    timestamp: datetime | None = None
+
+
+class CommitSessionRequest(BaseModel):
+    """Request model for commit_session endpoint."""
+
+    session_id: str
+    messages: list[MessageSchema]
+
+
+class CommitSessionResponse(BaseModel):
+    """Response model for commit_session endpoint."""
+
+    task_id: str
+
+
+class TaskStatusResponse(BaseModel):
+    """Response model for task status endpoint."""
+
+    task_id: str
+    session_id: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    error_message: str | None = None
+    histories_written: bool = False
+
+
+class NotesResponse(BaseModel):
+    """Response model for notes endpoint."""
+
+    session_id: str
+    content: str | None = None
+    exists: bool
+
+
+class RetrySessionRequest(BaseModel):
+    """Request model for retry_session endpoint."""
+
+    session_id: str

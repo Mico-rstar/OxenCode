@@ -21,11 +21,19 @@ from memsvc.api.schemas import (
     LoadMemoryRequest,
     LoadMemoryResponse,
     MemoryContent,
+    # Session API schemas
+    CommitSessionRequest,
+    CommitSessionResponse,
+    TaskStatusResponse,
+    NotesResponse,
+    RetrySessionRequest,
 )
 from memsvc.config import settings
 from memsvc.core.metadata import MetadataManager
 from memsvc.core.watcher import FileWatcher
 from memsvc.core.indexer import MemoryIndexer
+from memsvc.core.task_manager import TaskManager
+from memsvc.core.compressor import SessionCompressor
 
 router = APIRouter()
 
@@ -33,6 +41,8 @@ router = APIRouter()
 _metadata_manager: MetadataManager | None = None
 _file_watcher: FileWatcher | None = None
 _memory_indexer: MemoryIndexer | None = None
+_task_manager: TaskManager | None = None
+_session_compressor: SessionCompressor | None = None
 
 
 def set_metadata_manager(manager: MetadataManager | None) -> None:
@@ -53,6 +63,18 @@ def set_memory_indexer(indexer: MemoryIndexer | None) -> None:
     _memory_indexer = indexer
 
 
+def set_task_manager(manager: TaskManager | None) -> None:
+    """Set task manager instance (used by app lifespan or tests)."""
+    global _task_manager
+    _task_manager = manager
+
+
+def set_session_compressor(compressor: SessionCompressor | None) -> None:
+    """Set session compressor instance (used by app lifespan or tests)."""
+    global _session_compressor
+    _session_compressor = compressor
+
+
 def get_metadata_manager() -> MetadataManager:
     """Dependency to get metadata manager instance."""
     if _metadata_manager is None:
@@ -70,6 +92,20 @@ def get_memory_indexer() -> MemoryIndexer:
     if _memory_indexer is None:
         raise HTTPException(status_code=503, detail="Memory indexer not initialized")
     return _memory_indexer
+
+
+def get_task_manager() -> TaskManager:
+    """Dependency to get task manager instance."""
+    if _task_manager is None:
+        raise HTTPException(status_code=503, detail="Task manager not initialized")
+    return _task_manager
+
+
+def get_session_compressor() -> SessionCompressor:
+    """Dependency to get session compressor instance."""
+    if _session_compressor is None:
+        raise HTTPException(status_code=503, detail="Session compressor not initialized")
+    return _session_compressor
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -321,3 +357,157 @@ async def load_memory(
             for m in memories
         ]
     )
+
+
+# === Session API Endpoints ===
+
+
+@router.post("/commit_session", response_model=CommitSessionResponse)
+async def commit_session(
+    request: CommitSessionRequest,
+    task_manager: TaskManager = Depends(get_task_manager),
+) -> CommitSessionResponse:
+    """Commit a session for async processing.
+
+    Writes messages to histories and compresses to notes asynchronously.
+    Returns immediately with a task_id for tracking.
+
+    Args:
+        request: Session ID and messages to process.
+
+    Returns:
+        task_id: Unique identifier for tracking the async task.
+    """
+    # Convert messages to dict format
+    messages = [
+        {
+            "role": msg.role,
+            "content": msg.content,
+            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+        }
+        for msg in request.messages
+    ]
+
+    try:
+        task_id = await task_manager.create_task(request.session_id, messages)
+        return CommitSessionResponse(task_id=task_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.get(
+    "/task/{task_id}/status",
+    response_model=TaskStatusResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_task_status(
+    task_id: str,
+    task_manager: TaskManager = Depends(get_task_manager),
+) -> TaskStatusResponse:
+    """Get the status of an async task.
+
+    Args:
+        task_id: Task identifier returned by commit_session.
+
+    Returns:
+        Current task status and metadata.
+    """
+    task = await task_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    return TaskStatusResponse(
+        task_id=task.task_id,
+        session_id=task.session_id,
+        status=task.status.value,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        error_message=task.error_message,
+        histories_written=task.histories_written,
+    )
+
+
+@router.get(
+    "/notes/{session_id}",
+    response_model=NotesResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_notes(
+    session_id: str,
+    compressor: SessionCompressor = Depends(get_session_compressor),
+) -> NotesResponse:
+    """Get the compressed notes for a session.
+
+    Args:
+        session_id: Session identifier.
+
+    Returns:
+        Compressed notes content if available.
+    """
+    content = compressor.load_notes(session_id)
+    exists = content is not None
+
+    return NotesResponse(
+        session_id=session_id,
+        content=content,
+        exists=exists,
+    )
+
+
+@router.post("/retry_session", response_model=CommitSessionResponse)
+async def retry_session(
+    request: RetrySessionRequest,
+    task_manager: TaskManager = Depends(get_task_manager),
+    compressor: SessionCompressor = Depends(get_session_compressor),
+) -> CommitSessionResponse:
+    """Retry a failed session processing.
+
+    Re-processes a session that has histories but failed to compress.
+    Does not re-write histories if they already exist.
+
+    Args:
+        request: Session ID to retry.
+
+    Returns:
+        task_id: New task identifier for tracking.
+
+    Raises:
+        404: If session has no histories to process.
+        409: If session already has a pending task.
+    """
+    session_id = request.session_id
+
+    # Check if histories exist
+    if not compressor.histories_exists(session_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No histories found for session: {session_id}"
+        )
+
+    # Load messages from histories
+    session_data = compressor.load_histories(session_id)
+    if not session_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Failed to load histories for session: {session_id}"
+        )
+
+    messages = session_data.get("messages", [])
+
+    # Check for existing task
+    existing = await task_manager.get_task_by_session(session_id)
+    if existing and existing.status in ("pending", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session {session_id} already has a {existing.status} task"
+        )
+
+    # Create new task - the processor will skip histories since they exist
+    task_id = await task_manager.create_task(session_id, messages)
+
+    # Mark that histories are already written (for the retry case)
+    task = await task_manager.get_task(task_id)
+    if task:
+        task.histories_written = True
+
+    return CommitSessionResponse(task_id=task_id)

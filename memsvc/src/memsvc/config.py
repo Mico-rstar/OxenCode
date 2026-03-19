@@ -49,6 +49,19 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     chunk_separators: list[str] = ["\n\n", "\n", "。", "，", " ", ""]
 
+    # Prompts configuration
+    prompts_dir: Path | None = None  # Defaults to package prompts/ directory
+
+    # LLM configuration (for compression)
+    llm_provider: Literal["qwen", "mock"] = "qwen"
+    llm_model: str = "qwen3-max"
+    llm_api_key: str = "sk-8440a58764c846c88183bfec2d94d279"  # Defaults to embedding_api_key if empty
+    llm_max_tokens: int = 2000
+    llm_temperature: float = 0.7
+
+    # Session compression configuration
+    max_messages_for_compression: int = 100
+
     @property
     def db_path(self) -> Path:
         """Path to metadata database."""
@@ -58,6 +71,27 @@ class Settings(BaseSettings):
     def chroma_persist_dir(self) -> Path:
         """Path to ChromaDB persistence directory."""
         return self.data_dir / "chromadb"
+
+    @property
+    def effective_prompts_dir(self) -> Path:
+        """Path to prompts directory.
+
+        Returns the configured prompts_dir or defaults to the package's prompts/ directory.
+        """
+        if self.prompts_dir:
+            return self.prompts_dir
+        # Default to prompts/ directory in the package
+        import memsvc
+        package_dir = Path(memsvc.__file__).parent
+        return package_dir / "prompts"
+
+    @property
+    def effective_llm_api_key(self) -> str:
+        """Get effective LLM API key.
+
+        Returns llm_api_key if set, otherwise falls back to embedding_api_key.
+        """
+        return self.llm_api_key or self.embedding_api_key
 
     def ensure_directories(self) -> None:
         """Create necessary directories."""

@@ -224,6 +224,11 @@ Response: { "status": "completed", "notes_file": "notes/20240315.json" }
 GET /notes/{session_id}
 Response: { "content": "压缩后的notes内容" }
 
+POST /retry_session
+Request:  { "session_id": "xxx" }
+Response:  { "task_id": "task_xxx" }
+# 用于处理提交成功但后续压缩/索引失败的session重新处理
+
 POST /re_embed
 Request:  { }  # 可选指定types
 Response: { "updated_files": ["experience/xxx.json"], "indexed_count": 3 }
@@ -293,15 +298,18 @@ description: 描述文档的主要内容/调用条件
 3. 写入histories + messages→notes压缩（LLM调用）
 4. 任务状态管理
 5. `/task/{id}/status` 和 `/notes/{id}` 接口
+6. `/retry_session` 重试接口
 
 **验收标准：**
-- [ ] messages正确写入histories/{session_id}.json
-- [ ] `POST /commit_session` 写入成功后，立即返回task_id，不阻塞
-- [ ] LLM压缩生成notes/{session_id}.md，包含正确frontmatter
-- [ ] `GET /task/{id}/status` 正确返回pending/completed/failed状态
-- [ ] 任务完成后 `GET /notes/{session_id}` 返回压缩内容
-- [ ] 任务失败时状态包含错误信息
-- [ ] 服务重启后能恢复未完成任务状态
+- [x] messages正确写入histories/{session_id}.json
+- [x] `POST /commit_session` 写入成功后，立即返回task_id，不阻塞
+- [x] LLM压缩生成notes/{session_id}.md，包含正确frontmatter
+- [x] `GET /task/{id}/status` 正确返回pending/completed/failed状态
+- [x] 任务完成后 `GET /notes/{session_id}` 返回压缩内容
+- [x] 任务失败时状态包含错误信息
+- [x] 服务重启后能恢复未完成任务状态
+- [x] `POST /retry_session` 能对已存在histories但处理失败的session重新处理
+- [x] retry不重复写入histories，只重新执行压缩
 
 #### Phase 4: Go端集成
 1. 记忆服务HTTP客户端封装为go sdk
