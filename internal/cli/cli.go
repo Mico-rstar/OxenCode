@@ -53,6 +53,7 @@ func (c *CLI) registerCommands() {
 	c.registry.Register(commands.NewClearCommand())
 	c.registry.Register(commands.NewNewCommand())
 	c.registry.Register(commands.NewHelpCommand(c.registry))
+	c.registry.Register(commands.NewCommitMemoryCommand())
 }
 
 // Run 启动 REPL 循环
@@ -325,6 +326,22 @@ func (c *CLI) GetSessionID() string {
 		return c.agent.GetSessionID()
 	}
 	return ""
+}
+
+// IsMemoryEnabled 检查记忆服务是否启用（实现 CommandContext 接口）
+func (c *CLI) IsMemoryEnabled() bool {
+	if c.agent != nil {
+		return c.agent.IsMemoryEnabled()
+	}
+	return false
+}
+
+// CommitSessionToMemory 提交当前会话到记忆服务（实现 CommandContext 接口）
+func (c *CLI) CommitSessionToMemory(ctx context.Context) (string, error) {
+	if c.agent != nil {
+		return c.agent.CommitSessionToMemory(ctx)
+	}
+	return "", fmt.Errorf("agent not available")
 }
 
 // Ensure CLI implements CommandContext

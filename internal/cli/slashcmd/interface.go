@@ -13,6 +13,10 @@ type CommandContext interface {
 	NewSession() error
 	// GetSessionID 获取当前会话 ID
 	GetSessionID() string
+	// IsMemoryEnabled 检查记忆服务是否启用
+	IsMemoryEnabled() bool
+	// CommitSessionToMemory 提交当前会话到记忆服务
+	CommitSessionToMemory(ctx context.Context) (string, error)
 }
 
 // SlashCommand 斜杠命令接口

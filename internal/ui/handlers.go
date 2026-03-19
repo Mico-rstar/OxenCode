@@ -37,10 +37,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyEnter:
 		if m.input != "" && m.appState == StateIdle {
-			// 检查是否是斜杠命令
-			if strings.HasPrefix(m.input, "/") {
-				return m.handleSlashCommand(m.input)
-			}
 			return m, NewUserMessage(m.input)
 		}
 		return m, nil
@@ -423,68 +419,3 @@ func (m Model) handleInterrupt() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleSlashCommand 处理斜杠命令
-func (m *Model) handleSlashCommand(cmd string) (tea.Model, tea.Cmd) {
-	// 移除开头的斜杠
-	cmd = strings.TrimPrefix(cmd, "/")
-
-	switch cmd {
-	case "commit-memory", "memory-commit":
-		return m.handleCommitMemory()
-	case "help":
-		m.messages = append(m.messages, message.NewMessage(
-			message.RoleSystem,
-			"可用命令：\n/commit-memory - 提交当前会话到记忆服务\n/help - 显示帮助信息",
-		))
-		m.input = ""
-		return m, nil
-	default:
-		m.messages = append(m.messages, message.NewMessage(
-			message.RoleSystem,
-			fmt.Sprintf("未知命令: /%s\n输入 /help 查看可用命令", cmd),
-		))
-		m.input = ""
-		return m, nil
-	}
-}
-
-// handleCommitMemory 处理 /commit-memory 命令
-func (m *Model) handleCommitMemory() (tea.Model, tea.Cmd) {
-	// 清空输入
-	m.input = ""
-
-	// 检查Agent是否可用
-	if m.agent == nil {
-		m.messages = append(m.messages, message.NewMessage(
-			message.RoleSystem,
-			"错误: Agent不可用",
-		))
-		return m, nil
-	}
-
-	// 检查记忆服务是否启用
-	if !m.agent.IsMemoryEnabled() {
-		m.messages = append(m.messages, message.NewMessage(
-			message.RoleSystem,
-			"错误: 记忆服务未启用。\n请在配置中设置 memory_enabled = true",
-		))
-		return m, nil
-	}
-
-	// 提交会话到记忆服务
-	taskID, err := m.agent.CommitSessionToMemory(m.ctx)
-	if err != nil {
-		m.messages = append(m.messages, message.NewMessage(
-			message.RoleSystem,
-			fmt.Sprintf("提交失败: %s", err.Error()),
-		))
-		return m, nil
-	}
-
-	m.messages = append(m.messages, message.NewMessage(
-		message.RoleSystem,
-		fmt.Sprintf("会话已提交到记忆服务。\nSession ID: %s\nTask ID: %s", m.agent.GetSessionID(), taskID),
-	))
-
-	return m, nil
-}
