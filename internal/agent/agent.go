@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"charm.land/fantasy"
@@ -187,49 +186,48 @@ func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 	promptDir := cfg.PromptDir
 
 	p := prompt.New(promptDir)
-	if err := p.Load(); err != nil {
+	// 构建提示词变量
+	vars := make(map[string]string)
+
+	// 加载inner内容（如果记忆服务启用）
+	if cfg.MemoryEnabled && cfg.MemoryDir != "" {
+		vars = loadInnerVars(cfg.MemoryDir, log)
+		if len(vars) > 0 {
+			log.Info("Inner content loaded", "memory_dir", cfg.MemoryDir)
+		}
+	}
+
+	// 加载提示词并注入变量
+	if err := p.LoadWithVars(vars); err != nil {
 		log.Warn("Failed to load system prompt from file, using default", "error", err, "promptDir", promptDir)
 		panic("System prompt not found")
 	}
 
 	systemPrompt := p.SystemPrompt
 
-	// 加载inner内容（如果记忆服务启用）
-	if cfg.MemoryEnabled && cfg.MemoryDir != "" {
-		innerContent := loadInnerContent(cfg.MemoryDir, log)
-		if innerContent != "" {
-			systemPrompt += "\n\n" + innerContent
-			log.Info("Inner content loaded", "memory_dir", cfg.MemoryDir)
-		}
-	}
-
 	log.Info("System prompt loaded", "source", promptDir, "length", len(systemPrompt))
 	return systemPrompt
 }
 
-// loadInnerContent 加载inner目录内容（self.md和user.md）
-func loadInnerContent(memoryDir string, log logger.Logger) string {
-	var content strings.Builder
+// loadInnerVars 加载inner目录内容为变量map
+func loadInnerVars(memoryDir string, log logger.Logger) map[string]string {
+	vars := make(map[string]string)
 
 	// 加载 inner/self.md
 	selfPath := filepath.Join(memoryDir, "inner", "self.md")
 	if data, err := os.ReadFile(selfPath); err == nil && len(data) > 0 {
-		content.WriteString("<self_cognition>\n")
-		content.WriteString(string(data))
-		content.WriteString("\n</self_cognition>\n")
+		vars["inner_self"] = "<self_cognition>\n" + string(data) + "\n</self_cognition>"
 		log.Debug("Loaded inner/self.md")
 	}
 
 	// 加载 inner/user.md
 	userPath := filepath.Join(memoryDir, "inner", "user.md")
 	if data, err := os.ReadFile(userPath); err == nil && len(data) > 0 {
-		content.WriteString("<user_preference>\n")
-		content.WriteString(string(data))
-		content.WriteString("\n</user_preference>\n")
+		vars["inner_user"] = "<user_preference>\n" + string(data) + "\n</user_preference>"
 		log.Debug("Loaded inner/user.md")
 	}
 
-	return content.String()
+	return vars
 }
 
 // createProvider 根据 provider 类型创建对应的 provider

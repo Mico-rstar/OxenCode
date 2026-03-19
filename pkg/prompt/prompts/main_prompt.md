@@ -35,6 +35,9 @@ When tools fail:
 4. Don't retry indefinitely without good reason
 </error_handling>
 
+{{VAR:inner_self}}
+{{VAR:inner_user}}
+
 <examples>
 **Example: Finding code in codebase**
 
