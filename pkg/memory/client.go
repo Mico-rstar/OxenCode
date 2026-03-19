@@ -183,27 +183,17 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (*TaskStatusR
 	return resp, nil
 }
 
-// GetNotes 获取压缩后的notes
-func (c *Client) GetNotes(ctx context.Context, sessionID string) (*NotesResponse, error) {
-	resp := &NotesResponse{}
-	if err := c.doRequest(ctx, http.MethodGet, "/notes/"+sessionID, nil, resp); err != nil {
-		c.logger.Error("GetNotes failed", "error", err, "session_id", sessionID)
+// RetrySession 重试失败的session处理
+func (c *Client) RetrySession(ctx context.Context, sessionID string) (*CommitSessionResponse, error) {
+	req := &RetrySessionRequest{
+		SessionID: sessionID,
+	}
+	resp := &CommitSessionResponse{}
+	if err := c.doRequest(ctx, http.MethodPost, "/retry_session", req, resp); err != nil {
+		c.logger.Error("RetrySession failed", "error", err, "session_id", sessionID)
 		return nil, err
 	}
-	return resp, nil
-}
-
-// ReEmbed 增量重建索引
-func (c *Client) ReEmbed(ctx context.Context, types []string) (*ReEmbedResponse, error) {
-	req := &ReEmbedRequest{
-		Types: types,
-	}
-	resp := &ReEmbedResponse{}
-	if err := c.doRequest(ctx, http.MethodPost, "/re_embed", req, resp); err != nil {
-		c.logger.Error("ReEmbed failed", "error", err)
-		return nil, err
-	}
-	c.logger.Info("ReEmbed completed", "indexed", resp.IndexedCount, "skipped", resp.SkippedCount)
+	c.logger.Info("Session retry initiated", "session_id", sessionID, "task_id", resp.TaskID)
 	return resp, nil
 }
 

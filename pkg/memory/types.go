@@ -82,26 +82,6 @@ type TaskStatusResponse struct {
 	HistoriesWritten bool       `json:"histories_written"`
 }
 
-// NotesResponse notes响应
-type NotesResponse struct {
-	SessionID string  `json:"session_id"`
-	Content   *string `json:"content"`
-	Exists    bool    `json:"exists"`
-}
-
-// ReEmbedRequest re_embed请求
-type ReEmbedRequest struct {
-	Types []string `json:"types,omitempty"`
-}
-
-// ReEmbedResponse re_embed响应
-type ReEmbedResponse struct {
-	UpdatedFiles []string  `json:"updated_files"`
-	IndexedCount int       `json:"indexed_count"`
-	SkippedCount int       `json:"skipped_count"`
-	Errors       []string  `json:"errors,omitempty"`
-}
-
 // RetrySessionRequest retry_session请求
 type RetrySessionRequest struct {
 	SessionID string `json:"session_id"`

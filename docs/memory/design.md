@@ -1,7 +1,7 @@
 # OxenCode记忆系统设计
 ## Idea 
 OxenCode的记忆系统 = 文件系统 + RAG + Agent记忆管理线程
-OxenCode使用文件系统来阻止自身的记忆，记忆系统运行时动态检测记忆文件变更，自动触发向量索引构建，记忆系统不包含Agent 运行时，记忆整理工作由OxenCode的Agent运行时来自主进行
+OxenCode使用文件系统来阻止自身的记忆，记忆系统运行时动态检测记忆文件变更，自动触发向量索引构建
 
 ### 文件系统组织
 ```
@@ -17,21 +17,17 @@ memory
 
 ### RAG系统
 - RAG系统的管理范围包括：experience, knowledge, notes
-- 技术栈：Chroma向量数据库，embbedding模型（调用云接口）
+- 技术栈：Chroma向量数据库，embbedding模型（调用云接口），langchain
 
 ### 记忆管理系统对外暴露接口
 1. trigger_memory: 快速判断记忆系统是否包含相关内容
 2. search_memory: RAG检索+rerank
 3. commit_session: 提交会话信息进行归档和压缩 messages -> notes，异步任务
-4. get_notes(session_id): 获取指定session_id的notes，用于Agent记忆管理线程进行自主记忆整理
-5. re_embed: 检查文件哈希，将变更文件重新建立索引
 
-> **注意**: Agent运行时与记忆服务共享memory目录，Agent直接使用Write/Bash等工具读写memory文件，无需记忆服务开放写入API。inner/目录内容自动装载到Agent上下文（类似mmap机制）。
 
 ### 记忆管理系统后台任务
-1. session处理队列: 将commit_session 摘要为notes
-
-
+1. session处理队列: 将commit_session 摘要为notes -> 启动experience_agent, knowledge_agent, inner_agent，注入各自的system_prompt和notes为上下文，进行记忆整理 -> 等待所有代理运行成功 -> 触发 re_embed -> 更新状态 -> 启动experience_agent, knowledge_agent, inner_agent，注入各自的system_prompt和notes为上下文，进行记忆整理 -> 等待所有代理运行成功 -> 触发 re_embed -> 更新状态
+2. 
 ## Design
 ### 技术栈
 
@@ -59,25 +55,27 @@ memory
 ```
                     ┌─────────────────────────────┐
                     │        memory/ (共享)        │
-                    │  ├─ experience/  ← Agent Write
-                    │  ├─ knowledge/   ← Agent Write
+                    │  ├─ experience/  ← 服务写入
+                    │  ├─ knowledge/   ← 服务写入
                     │  ├─ notes/        ← 服务写入
                     │  ├─ histories/    ← 服务写入
-                    │  └─ inner/        ← 自动装载(mmap)
+                    │  └─ inner/        ← 自动装载(mmap) + 服务更新
                     └──────────┬──────────────────┘
                                │
         ┌──────────────────────┼──────────────────────┐
         │                      │                      │
         ▼                      ▼                      ▼
 ┌───────────────┐      ┌───────────────┐      ┌───────────────┐
-│   主Agent     │      │ 记忆管理Agent │      │   记忆服务    │
+│   主Agent     │      │ 监控goroutine │      │   记忆服务    │
 │    (Go)       │      │    (Go)       │      │   (Python)    │
 ├───────────────┤      ├───────────────┤      ├───────────────┤
-│ [inner自动装载]│      │ [inner自动装载]│      │               │
-│               │      │               │      │ 监控文件变更   │
-│ HTTP: search  │      │ Read: notes   │      │ 维护RAG索引   │
-│               │      │ Write: exp/know│      │ 异步压缩任务   │
-│               │      │ HTTP: re_embed │      │ 写入histories  │
+│ [inner自动装载]│      │               │      │               │
+│               │      │ 轮询任务状态   │      │ 监控文件变更   │
+│ HTTP: search  │      │ 失败时重试    │      │ 维护RAG索引   │
+│ HTTP: commit  │      │               │      │ 异步任务:     │
+│               │      │               │      │  - 压缩notes  │
+│               │      │               │      │  - 多Agent整理 │
+│               │      │               │      │  - re_embed   │
 └───────────────┘      └───────────────┘      └───────────────┘
 ```
 
@@ -98,48 +96,51 @@ memory
         │ Session结束                       │                 │
         ▼                                   │                 │
 ┌───────────────┐    POST /commit_session  │                 │
-│               │ ───────────────────────▶ │  异步任务:      │
-│               │   返回 task_id           │  1. Write: histories/
-│               │                          │     {session}.json
-│               │                          │  2. 压缩: messages
-│               │                          │     → notes/
-└───────────────┘                          └────────┬────────┘
-                                                  │
-                                                  │ 完成
-                                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    记忆管理Agent (Go)                                │
-│                    [inner已自动装载]                                 │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌───────────────┐   GET /task/{id}/status   ┌─────────────────┐
-│ 记忆管理Agent │◀─────────────────────────│                 │
-│               │                           │                 │
-│               │   GET /notes/{session_id} │                 │
-│               │─────────────────────────▶│                 │
-│               │◀─────────────────────────│                 │
-└───────┬───────┘                           └─────────────────┘
-        │
-        │ 自主决策归类
-        │
-        ▼
-┌───────────────────────────────────────────────────────────────────┐
-│  Write工具直接写入文件:                                            │
-│    memory/experience/xxx.json  ← 提取的经验规则                    │
-│    memory/knowledge/xxx.json   ← 提取的事实知识                    │
-│    memory/inner/self.md        ← 更新自我认知                      │
-│    memory/inner/user.md        ← 更新用户偏好                      │
-└───────────────────────────────────────────────────────────────────┘
-        │
-        │ 写入完成
-        ▼
-┌───────────────┐      POST /re_embed      ┌─────────────────┐
-│ 记忆管理Agent │ ───────────────────────▶ │   记忆服务      │
-│               │                          │                 │
-│               │                          │  1. 计算哈希    │
-│               │                          │  2. 对比变更    │
-│               │                          │  3. 增量索引    │
+│               │ ───────────────────────▶ │  异步任务队列:  │
+│               │   返回 task_id           │  ┌─────────────┐│
+│               │                          │  │ 1. Write    ││
+└───────┬───────┘                          │  │    histories││
+        │                                   │  │ 2. 压缩     ││
+        │ 启动监控goroutine                 │  │    → notes  ││
+        ▼                                   │  │ 3. 并行启动 ││
+┌───────────────┐   GET /task/{id}/status  │  │    3 Agent  ││
+│ 监控goroutine │◀─────────────────────────│  │    整理     ││
+│  (Go)         │                          │  │ 4. re_embed ││
+│               │   失败时POST /retry      │  └─────────────┘│
+│ - 轮询状态    │ ───────────────────────▶ │                 │
+│ - 失败重试    │                          │                 │
 └───────────────┘                          └─────────────────┘
+```
+
+**Python端异步任务详情**:
+
+```
+commit_session提交
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      异步任务处理器                           │
+├─────────────────────────────────────────────────────────────┤
+│  Step 1: Write histories/{session_id}.json                  │
+│                                                             │
+│  Step 2: LLM压缩 messages → notes/{session_id}.md           │
+│                                                             │
+│  Step 3: 并行启动记忆整理Agent                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │ experience  │  │ knowledge   │  │ inner       │         │
+│  │ _agent      │  │ _agent      │  │ _agent      │         │
+│  │             │  │             │  │             │         │
+│  │ 提取经验规则 │  │ 提取事实知识 │  │ 更新自我/用户│         │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
+│         │                │                │                 │
+│         └────────────────┼────────────────┘                 │
+│                          ▼                                  │
+│  Step 4: 汇总结果，写入 memory/experience/knowledge/inner   │
+│                                                             │
+│  Step 5: 触发 re_embed 更新向量索引                         │
+│                                                             │
+│  Step 6: 更新任务状态为 completed                           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### 系统架构
@@ -148,16 +149,14 @@ memory
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      OxenCode Agent Runtime (Go)                    │
 ├────────────────────────────────┬────────────────────────────────────┤
-│      主线程 (Task Agent)       │      记忆管理线程 (Memory Agent)   │
+│      主线程 (Task Agent)       │      监控goroutine                 │
 │  ┌──────────────────────┐     │  ┌────────────────────────────┐    │
-│  │ [inner 自动装载]       │     │  │ [inner 自动装载]            │    │
-│  │                      │     │  │                            │    │
-│  │ - 处理用户请求        │     │  │ - 轮询任务状态              │    │
-│  │ - HTTP: search/trigger│     │  │ - Read工具: notes          │    │
-│  │                      │     │  │ - Write工具: exp/knowledge │    │
-│  │                      │     │  │ - Write工具: inner更新      │    │
-│  └──────────────────────┘     │  │ - HTTP: re_embed           │    │
-│                               │  └────────────────────────────┘    │
+│  │ [inner 自动装载]       │     │  │                            │    │
+│  │                      │     │  │ - 轮询任务状态              │    │
+│  │ - 处理用户请求        │     │  │ - 失败时调用retry_session  │    │
+│  │ - HTTP: search/trigger│     │  │                            │    │
+│  │ - HTTP: commit_session│     │  └────────────────────────────┘    │
+│  └──────────────────────┘     │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
 │                          共享文件系统: memory/                       │
 │  ┌─────────────────────────────────────────────────────────────┐   │
@@ -173,10 +172,11 @@ memory
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  POST /trigger_memory  - 快速判断是否有相关记忆              │   │
 │  │  POST /search_memory   - RAG检索+rerank                     │   │
-│  │  POST /commit_session  - 提交session，异步压缩              │   │
+│  │  POST /commit_session  - 提交session，异步处理              │   │
 │  │  GET  /task/{id}/status - 查询异步任务状态                   │   │
 │  │  GET  /notes/{id}      - 获取压缩后的notes                   │   │
 │  │  POST /re_embed        - 增量重建索引                        │   │
+│  │  POST /retry_session   - 重试失败的session                   │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Core Layer                                                         │
@@ -191,24 +191,32 @@ memory
 │  Async Task Queue                                                   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  commit_session任务:                                          │   │
-│  │  1. Write: histories/{session}.json (原始messages)           │   │
-│  │  2. 压缩: messages → notes/{session}.json (LLM调用)          │   │
+│  │  1. Write: histories/{session}.json                          │   │
+│  │  2. 压缩: messages → notes/{session}.md (LLM)                │   │
+│  │  3. 并行启动记忆整理Agent:                                    │   │
+│  │     - experience_agent → memory/experience/                  │   │
+│  │     - knowledge_agent  → memory/knowledge/                   │   │
+│  │     - inner_agent      → memory/inner/                       │   │
+│  │  4. re_embed 增量索引                                         │   │
+│  │  5. 更新任务状态                                              │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### API 接口定义
 
-记忆服务只暴露**只读查询**和**异步任务**接口，**不暴露写入接口**。Agent通过Write工具直接操作memory目录。
+记忆服务暴露**查询**和**异步任务**接口。Agent不直接写入memory，整理工作由异步任务完成。
+
+**对外接口**（Go端调用）：
 
 ```
 POST /trigger_memory
 Request:  { "query": "用户查询文本" }
-Response: { "has_relevant": true, "hint": "有相关经验记录" }
+Response: { "has_relevant": true, "hint": "有相关经验记录", "score": 0.85 }
 
 POST /search_memory
 Request:  { "queries": ["查询文本1", "查询文本2"], "top_k": 5, "types": ["experience", "knowledge"] }
-Response: { "results": [{ "id": "xxx", "description": "描述内容", "score": 0.85 }] }
+Response: { "results": [{ "id": "xxx", "description": "描述内容", "score": 0.85, "excerpt": "..." }] }
 
 POST /load_memory
 Request:  { "ids": ["id1", "id2"] }
@@ -217,21 +225,22 @@ Response: { "memories": [{ "id": "xxx", "content": "完整内容", "source": "ex
 POST /commit_session
 Request:  { "session_id": "xxx", "messages": [...] }
 Response: { "task_id": "task_xxx" }
+# 提交session，异步执行：压缩 → 多Agent整理 → re_embed
 
 GET /task/{task_id}/status
-Response: { "status": "completed", "notes_file": "notes/20240315.json" }
-
-GET /notes/{session_id}
-Response: { "content": "压缩后的notes内容" }
+Response: { "status": "completed|pending|running|failed", "error_message": "..." }
 
 POST /retry_session
 Request:  { "session_id": "xxx" }
-Response:  { "task_id": "task_xxx" }
-# 用于处理提交成功但后续压缩/索引失败的session重新处理
+Response: { "task_id": "task_xxx" }
+# 重试失败的session处理
+```
 
-POST /re_embed
-Request:  { }  # 可选指定types
-Response: { "updated_files": ["experience/xxx.json"], "indexed_count": 3 }
+**内部接口**（不对外暴露）：
+
+```
+GET /notes/{session_id}     # 异步任务内部使用，加载notes供多Agent整理
+POST /re_embed              # 异步任务内部调用，增量更新向量索引
 ```
 
 ### 记忆分层
@@ -326,24 +335,55 @@ description: 描述文档的主要内容/调用条件
 - [x] /commit-memory命令能提交session并返回task_id
 - [x] 网络错误时有明确的错误日志和重试机制
 
-#### Phase 5: 记忆管理线程 (Go)
-1. 设计记忆管理Agent系统提示
-2. 任务状态轮询机制
-3. Read工具读取notes
-4. 记忆归类决策逻辑
-5. Write工具写入experience/knowledge/inner
-6. re_embed触发
+#### Phase 5: 架构变更处理
+原设计Agent自主管理记忆，现变更为Memory System统一管理。本阶段处理架构调整。
+
+**变更内容**：
+1. ~~Go端记忆管理Agent~~ → 不再需要，整理权交给Python端
+2. Go端新增轻量级监控goroutine：提交session后轮询状态、失败重试
+3. inner目录装载机制已实现，确认正常工作
+4. Python端删除内部API：`/notes/{id}`和`/re_embed`（内部直接调用函数）
+
+**任务清单**：
+- [x] 确认inner目录自动装载机制（loadInnerVars）
+- [x] 确认commit-session命令可用
+- [x] Python端：删除`/notes/{session_id}`和`/re_embed` REST API端点
+- [x] Go端：移除GetNotes和ReEmbed客户端方法，添加RetrySession方法
+- [x] 实现监控goroutine
+  - [x] commit_session返回后启动goroutine
+  - [x] 轮询GET /task/{id}/status
+  - [x] 状态为failed时调用POST /retry_session
+  - [x] 最大重试次数可配置（config.toml）
+- [x] 添加监控配置项到config.go和config.example.toml
+- [x] 更新相关文档和注释
+
+**验收标准**：
+- [x] inner/self.md和inner/user.md自动注入Agent上下文
+- [x] /commit-memory命令可提交session并返回task_id
+- [x] Python端对外API仅保留：trigger/search/load/commit/task/status/retry
+- [x] 监控goroutine能正确轮询任务状态
+- [x] 任务失败时能自动重试（默认最多3次，可配置）
+- [x] 有完整的日志记录
+
+#### Phase 6: 多Agent记忆整理 (Python)
+1. 设计experience_agent、knowledge_agent、inner_agent系统提示
+2. 实现Agent基类与LLM调用封装
+3. 集成到异步任务流程：notes压缩完成后启动多Agent
+4. 并发执行多Agent，收集整理结果
+5. 汇总写入experience/knowledge/inner目录
+6. 自动触发re_embed
 
 **验收标准：**
-- [ ] 记忆管理Agent使用独立的系统提示，与主Agent隔离
-- [ ] 能轮询检测到commit_session任务完成
-- [ ] 能正确读取notes文件内容
-- [ ] 能自主决策：提取knowledge/experience/更新inner
+- [ ] experience_agent能从notes提取经验规则（"遇到X情况，应该Y"）
+- [ ] knowledge_agent能从notes提取事实知识（陈述性信息）
+- [ ] inner_agent能更新self.md和user.md（自我认知、用户偏好）
+- [ ] 三个Agent并行执行，结果汇总后统一写入
 - [ ] 写入文件符合schema规范（frontmatter + 正文）
-- [ ] 写入后能正确触发re_embed
-- [ ] 记忆管理过程有完整的日志记录
+- [ ] 整理完成后自动触发re_embed更新索引
+- [ ] Agent执行失败不影响notes压缩结果
+- [ ] 完整的日志记录和错误处理
 
-#### Phase 6: 优化与测试
+#### Phase 7: 优化与测试
 1. Rerank集成
 2. 记忆去重与合并
 3. 性能测试
@@ -363,5 +403,6 @@ description: 描述文档的主要内容/调用条件
 - [x] Phase 2: RAG索引层 (Python)
 - [x] Phase 3: 异步任务层 (Python)
 - [x] Phase 4: Go端集成
-- [ ] Phase 5: 记忆管理线程 (Go)
-- [ ] Phase 6: 优化与测试
+- [x] Phase 5: 架构变更处理（监控goroutine）
+- [ ] Phase 6: 多Agent记忆整理 (Python)
+- [ ] Phase 7: 优化与测试

@@ -122,3 +122,29 @@ tool_timeout = 10
 # ====== Google Vertex AI 配置 (可选) ======
 # google_project = "your-project-id"
 # google_location = "us-central1"
+
+# ====== Memory Service 配置 ======
+# 是否启用记忆服务
+# 记忆服务需要单独启动 Python 端服务 (memsvc)
+memory_enabled = false
+
+# 记忆服务 URL
+# 默认值: "http://127.0.0.1:8765"
+memory_service_url = "http://127.0.0.1:8765"
+
+# memory 目录路径
+# 默认值: ~/.oxencode/memory
+# memory_dir = "~/.oxencode/memory"
+
+# ====== 记忆任务监控配置 ======
+# 状态轮询间隔（秒）
+# 默认值: 5
+# memory_monitor_poll_interval = 5
+
+# 失败重试次数
+# 默认值: 3
+# memory_monitor_max_retries = 3
+
+# 单任务监控超时（秒）
+# 默认值: 600 (10分钟)
+# memory_monitor_timeout = 600

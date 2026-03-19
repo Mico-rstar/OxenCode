@@ -98,6 +98,11 @@ type Config struct {
 	MemoryServiceURL string `mapstructure:"memory_service_url"` // 记忆服务URL，默认 "http://127.0.0.1:8765"
 	MemoryDir        string `mapstructure:"memory_dir"`         // memory目录路径
 	MemoryEnabled    bool   `mapstructure:"memory_enabled"`     // 是否启用记忆服务
+
+	// Memory Service 监控配置
+	MemoryMonitorPollInterval int `mapstructure:"memory_monitor_poll_interval"` // 状态轮询间隔（秒）
+	MemoryMonitorMaxRetries   int `mapstructure:"memory_monitor_max_retries"`   // 最大重试次数
+	MemoryMonitorTimeout      int `mapstructure:"memory_monitor_timeout"`       // 单任务监控超时（秒）
 }
 
 var cfg *Config
@@ -171,6 +176,11 @@ func Load() (*Config, error) {
 	v.SetDefault("memory_service_url", "http://127.0.0.1:8765")
 	v.SetDefault("memory_dir", paths.MemoryDir())
 	v.SetDefault("memory_enabled", false)
+
+	// Memory Service 监控默认配置
+	v.SetDefault("memory_monitor_poll_interval", 5)   // 5秒轮询
+	v.SetDefault("memory_monitor_max_retries", 3)     // 最多重试3次
+	v.SetDefault("memory_monitor_timeout", 600)       // 10分钟超时
 
 	// 尝试读取用户配置文件
 	configExists := true

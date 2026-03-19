@@ -11,8 +11,6 @@ from memsvc.api.schemas import (
     ScanResponse,
     ServiceStatusResponse,
     IndexStatus,
-    ReEmbedRequest,
-    ReEmbedResponse,
     SearchMemoryRequest,
     SearchMemoryResponse,
     MemoryResult,
@@ -25,7 +23,6 @@ from memsvc.api.schemas import (
     CommitSessionRequest,
     CommitSessionResponse,
     TaskStatusResponse,
-    NotesResponse,
     RetrySessionRequest,
 )
 from memsvc.config import settings
@@ -218,58 +215,6 @@ async def scan_files(
     )
 
 
-@router.post("/re_embed", response_model=ReEmbedResponse)
-async def re_embed(
-    request: ReEmbedRequest = ReEmbedRequest(),
-    manager: MetadataManager = Depends(get_metadata_manager),
-    indexer: MemoryIndexer = Depends(get_memory_indexer),
-) -> ReEmbedResponse:
-    """Re-index pending memory files.
-
-    Indexes files with PENDING status into ChromaDB vector store.
-    Only processes new or modified files (based on content hash).
-    """
-    # Get pending files
-    pending_files = await manager.list_pending()
-
-    # Filter by types if specified
-    if request.types:
-        pending_files = [
-            f for f in pending_files
-            if f.path.split("/")[0] in request.types
-        ]
-
-    if not pending_files:
-        return ReEmbedResponse(
-            updated_files=[],
-            indexed_count=0,
-            skipped_count=0,
-        )
-
-    # Index files
-    paths = [f.path for f in pending_files]
-    results = await indexer.index_files(paths)
-
-    # Process results
-    updated_files = []
-    errors = []
-    indexed_count = 0
-
-    for result in results:
-        if result.success:
-            updated_files.append(result.path)
-            indexed_count += result.chunks_indexed
-        else:
-            errors.append(f"{result.path}: {result.error}")
-
-    return ReEmbedResponse(
-        updated_files=updated_files,
-        indexed_count=len(updated_files),
-        skipped_count=len(paths) - len(updated_files),
-        errors=errors if errors else None,
-    )
-
-
 @router.post("/search_memory", response_model=SearchMemoryResponse)
 async def search_memory(
     request: SearchMemoryRequest,
@@ -424,33 +369,6 @@ async def get_task_status(
         updated_at=task.updated_at,
         error_message=task.error_message,
         histories_written=task.histories_written,
-    )
-
-
-@router.get(
-    "/notes/{session_id}",
-    response_model=NotesResponse,
-    responses={404: {"model": ErrorResponse}},
-)
-async def get_notes(
-    session_id: str,
-    compressor: SessionCompressor = Depends(get_session_compressor),
-) -> NotesResponse:
-    """Get the compressed notes for a session.
-
-    Args:
-        session_id: Session identifier.
-
-    Returns:
-        Compressed notes content if available.
-    """
-    content = compressor.load_notes(session_id)
-    exists = content is not None
-
-    return NotesResponse(
-        session_id=session_id,
-        content=content,
-        exists=exists,
     )
 
 

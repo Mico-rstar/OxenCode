@@ -36,6 +36,7 @@ type Agent struct {
 	model        fantasy.LanguageModel // fantasy LanguageModel
 	session      *ctxpkg.Session       // 上下文会话（直接持有）
 	memoryClient *memory.Client        // 记忆服务客户端（可选）
+	taskMonitor  *memory.TaskMonitor   // 记忆任务监控器（可选）
 
 	// 通用字段
 	config       *config.Config
@@ -119,6 +120,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 
 	// 创建记忆服务客户端（如果启用）
 	var memoryClient *memory.Client
+	var taskMonitor *memory.TaskMonitor
 	if cfg.MemoryEnabled {
 		memoryClient = memory.NewClient(memory.DefaultClientConfig(cfg.MemoryServiceURL))
 		log.Info("Memory service client created", "url", cfg.MemoryServiceURL)
@@ -134,6 +136,10 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		registry.Register(searchMemoryTool)
 		registry.Register(loadMemoryTool)
 		log.Info("Memory tools registered")
+
+		// 创建任务监控器
+		taskMonitor = memory.NewTaskMonitor(memoryClient, cfg)
+		log.Info("Memory task monitor created")
 	}
 
 	// 创建压缩器（仅用于L0）
@@ -168,15 +174,16 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	log.Info("Agent created", "session_id", session.ID)
 
 	return &Agent{
-		reactLoop:    reactLoop,
-		provider:     provider,
-		model:        model,
-		session:      session,
-		memoryClient: memoryClient,
-		config:       cfg,
-		toolRegistry: registry,
-		env:          env,
-		logger:       log,
+		reactLoop:       reactLoop,
+		provider:        provider,
+		model:           model,
+		session:         session,
+		memoryClient:    memoryClient,
+		taskMonitor:     taskMonitor,
+		config:          cfg,
+		toolRegistry:    registry,
+		env:             env,
+		logger:          log,
 	}, nil
 }
 
@@ -573,6 +580,11 @@ func (a *Agent) CommitSessionToMemory(ctx context.Context) (string, error) {
 	if err != nil {
 		a.logger.Error("Failed to commit session to memory", "error", err)
 		return "", err
+	}
+
+	// 启动监控goroutine
+	if a.taskMonitor != nil {
+		a.taskMonitor.StartMonitoring(ctx, resp.TaskID, sessionID)
 	}
 
 	a.logger.Info("Session committed to memory", "session_id", sessionID, "task_id", resp.TaskID)
