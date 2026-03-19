@@ -264,6 +264,13 @@ description: 描述文档的主要内容/调用条件
 2. 目录结构与文件监控(watchdog)
 3. 元数据管理（哈希、状态）
 
+**验收标准：**
+- [ ] `POST /health` 返回 `{"status": "ok"}`
+- [ ] memory目录结构正确创建：inner/, experience/, knowledge/, notes/, histories/
+- [ ] 文件变更检测：新建/修改/删除文件能触发事件并记录到元数据
+- [ ] 元数据持久化：重启服务后能恢复文件哈希和索引状态
+- [ ] 配置文件支持：端口、memory路径、embedding provider可配置
+
 #### Phase 2: RAG索引层 (Python)
 1. Chroma集成
 2. Embedding接口（多provider支持）
@@ -272,6 +279,15 @@ description: 描述文档的主要内容/调用条件
 5. `/trigger_memory` 快速判断
 6. `/load_memory` 全量加载
 
+**验收标准：**
+- [ ] `POST /re_embed` 能检测文件变更，仅索引新增/修改的文件
+- [ ] 未变更文件不重复索引（哈希校验通过）
+- [ ] `POST /search_memory` 多query查询返回正确的id、description、score
+- [ ] `POST /trigger_memory` 能返回是否命中相关记忆（boolean）
+- [ ] `POST /load_memory` 能批量加载指定id的记忆文件内容
+- [ ] 支持至少2种embedding provider（如OpenAI、本地模型）
+- [ ] 删除文件后索引能正确清理
+
 #### Phase 3: 异步任务层 (Python)
 1. asyncio任务队列
 2. `/commit_session` 接口
@@ -279,11 +295,29 @@ description: 描述文档的主要内容/调用条件
 4. 任务状态管理
 5. `/task/{id}/status` 和 `/notes/{id}` 接口
 
+**验收标准：**
+- [ ] `POST /commit_session` 立即返回task_id，不阻塞
+- [ ] messages正确写入histories/{session_id}.json
+- [ ] LLM压缩生成notes/{session_id}.md，包含正确frontmatter
+- [ ] `GET /task/{id}/status` 正确返回pending/completed/failed状态
+- [ ] 任务完成后 `GET /notes/{session_id}` 返回压缩内容
+- [ ] 任务失败时状态包含错误信息
+- [ ] 服务重启后能恢复未完成任务状态
+
 #### Phase 4: Go端集成
 1. 记忆服务HTTP客户端封装
 2. inner目录自动装载机制（mmap式）
 3. 主线程：trigger_memory, search_memory调用
 4. Session结束：调用commit_session
+
+**验收标准：**
+- [ ] Go客户端能成功调用所有记忆服务API
+- [ ] inner/self.md 和 inner/user.md 内容自动注入Agent上下文
+- [ ] inner文件变更后，下一个Agent请求能获取最新内容
+- [ ] Agent能通过search_memory获取相关记忆description
+- [ ] Agent能通过load_memory获取完整记忆内容
+- [ ] Session结束时自动调用commit_session并记录task_id
+- [ ] 网络错误时有明确的错误日志和重试机制
 
 #### Phase 5: 记忆管理线程 (Go)
 1. 设计记忆管理Agent系统提示
@@ -293,10 +327,34 @@ description: 描述文档的主要内容/调用条件
 5. Write工具写入experience/knowledge/inner
 6. re_embed触发
 
+**验收标准：**
+- [ ] 记忆管理Agent使用独立的系统提示，与主Agent隔离
+- [ ] 能轮询检测到commit_session任务完成
+- [ ] 能正确读取notes文件内容
+- [ ] 能自主决策：提取knowledge/experience/更新inner
+- [ ] 写入文件符合schema规范（frontmatter + 正文）
+- [ ] 写入后能正确触发re_embed
+- [ ] 记忆管理过程有完整的日志记录
+
 #### Phase 6: 优化与测试
 1. Rerank集成
 2. 记忆去重与合并
 3. 性能测试
 4. 部署配置
 
+**验收标准：**
+- [ ] search_memory支持rerank，提升检索精度
+- [ ] 相似记忆能自动去重或提示合并
+- [ ] 1000条记忆检索延迟 < 500ms
+- [ ] commit_session压缩延迟 < 30s（100条消息）
+- [ ] Docker部署配置完整
+- [ ] 端到端测试：完整session生命周期 → 记忆生成 → 检索验证
+- [ ] 压力测试：并发10个commit_session无阻塞
 
+## 项目状态
+- [x] Phase 1: 记忆服务基础 (Python)
+- [ ] Phase 2: RAG索引层 (Python)
+- [ ] Phase 3: 异步任务层 (Python)
+- [ ] Phase 4: Go端集成
+- [ ] Phase 5: 记忆管理线程 (Go)
+- [ ] Phase 6: 优化与测试
