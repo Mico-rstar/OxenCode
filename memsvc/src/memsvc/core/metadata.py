@@ -106,6 +106,22 @@ class MetadataManager:
         )
         await self._db.commit()
 
+    async def mark_indexed(self, path: str) -> None:
+        """Mark a file as successfully indexed."""
+        await self._db.execute(
+            "UPDATE file_metadata SET index_status = ?, indexed_at = ?, error_message = NULL WHERE path = ?",
+            (IndexStatus.INDEXED.value, datetime.now().isoformat(), path),
+        )
+        await self._db.commit()
+
+    async def mark_failed(self, path: str, error: str) -> None:
+        """Mark a file as failed to index with error message."""
+        await self._db.execute(
+            "UPDATE file_metadata SET index_status = ?, error_message = ? WHERE path = ?",
+            (IndexStatus.FAILED.value, error, path),
+        )
+        await self._db.commit()
+
     async def list_all(self) -> list[FileMetadata]:
         """List all file metadata."""
         async with self._db.execute(

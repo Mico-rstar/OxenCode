@@ -246,7 +246,6 @@ Response: { "updated_files": ["experience/xxx.json"], "indexed_count": 3 }
 #### schema
 ```markdown
 ---
-id: 系统生成唯一id
 description: 描述文档的主要内容/调用条件
 ---
 正文部分
@@ -265,11 +264,11 @@ description: 描述文档的主要内容/调用条件
 3. 元数据管理（哈希、状态）
 
 **验收标准：**
-- [ ] `POST /health` 返回 `{"status": "ok"}`
-- [ ] memory目录结构正确创建：inner/, experience/, knowledge/, notes/, histories/
-- [ ] 文件变更检测：新建/修改/删除文件能触发事件并记录到元数据
-- [ ] 元数据持久化：重启服务后能恢复文件哈希和索引状态
-- [ ] 配置文件支持：端口、memory路径、embedding provider可配置
+- [x] `POST /health` 返回 `{"status": "ok"}`
+- [x] memory目录结构正确创建：inner/, experience/, knowledge/, notes/, histories/
+- [x] 文件变更检测：新建/修改/删除文件能触发事件并记录到元数据
+- [x] 元数据持久化：重启服务后能恢复文件哈希和索引状态
+- [x] 配置文件支持：端口、memory路径、embedding provider可配置
 
 #### Phase 2: RAG索引层 (Python)
 1. Chroma集成
@@ -280,13 +279,13 @@ description: 描述文档的主要内容/调用条件
 6. `/load_memory` 全量加载
 
 **验收标准：**
-- [ ] `POST /re_embed` 能检测文件变更，仅索引新增/修改的文件
-- [ ] 未变更文件不重复索引（哈希校验通过）
-- [ ] `POST /search_memory` 多query查询返回正确的id、description、score
-- [ ] `POST /trigger_memory` 能返回是否命中相关记忆（boolean）
-- [ ] `POST /load_memory` 能批量加载指定id的记忆文件内容
-- [ ] 支持至少2种embedding provider（如OpenAI、本地模型）
-- [ ] 删除文件后索引能正确清理
+- [x] `POST /re_embed` 能检测文件变更，仅索引新增/修改的文件
+- [x] 未变更文件不重复索引（哈希校验通过）
+- [x] `POST /search_memory` 多query查询返回正确的id、description、score
+- [x] `POST /trigger_memory` 能返回是否命中相关记忆（boolean）
+- [x] `POST /load_memory` 能批量加载指定id的记忆文件内容
+- [x] 支持至少2种embedding provider（Qwen、Mock）
+- [x] 删除文件后索引能正确清理
 
 #### Phase 3: 异步任务层 (Python)
 1. asyncio任务队列
@@ -296,8 +295,8 @@ description: 描述文档的主要内容/调用条件
 5. `/task/{id}/status` 和 `/notes/{id}` 接口
 
 **验收标准：**
-- [ ] `POST /commit_session` 立即返回task_id，不阻塞
 - [ ] messages正确写入histories/{session_id}.json
+- [ ] `POST /commit_session` 写入成功后，立即返回task_id，不阻塞
 - [ ] LLM压缩生成notes/{session_id}.md，包含正确frontmatter
 - [ ] `GET /task/{id}/status` 正确返回pending/completed/failed状态
 - [ ] 任务完成后 `GET /notes/{session_id}` 返回压缩内容
@@ -305,7 +304,7 @@ description: 描述文档的主要内容/调用条件
 - [ ] 服务重启后能恢复未完成任务状态
 
 #### Phase 4: Go端集成
-1. 记忆服务HTTP客户端封装
+1. 记忆服务HTTP客户端封装为go sdk
 2. inner目录自动装载机制（mmap式）
 3. 主线程：trigger_memory, search_memory调用
 4. Session结束：调用commit_session
@@ -353,7 +352,7 @@ description: 描述文档的主要内容/调用条件
 
 ## 项目状态
 - [x] Phase 1: 记忆服务基础 (Python)
-- [ ] Phase 2: RAG索引层 (Python)
+- [x] Phase 2: RAG索引层 (Python)
 - [ ] Phase 3: 异步任务层 (Python)
 - [ ] Phase 4: Go端集成
 - [ ] Phase 5: 记忆管理线程 (Go)

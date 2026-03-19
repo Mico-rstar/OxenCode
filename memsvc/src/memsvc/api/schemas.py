@@ -49,6 +49,8 @@ class ServiceStatusResponse(BaseModel):
     failed_count: int
     memory_dir: str
     uptime_seconds: float
+    trigger_docs: int = 0
+    search_docs: int = 0
 
 
 class HealthResponse(BaseModel):
@@ -77,3 +79,80 @@ class ErrorResponse(BaseModel):
 
     error: str
     detail: str | None = None
+
+
+# === RAG API Schemas ===
+
+
+class ReEmbedRequest(BaseModel):
+    """Request model for re_embed endpoint."""
+
+    types: list[str] | None = None  # Filter by memory types (experience, knowledge, notes)
+
+
+class ReEmbedResponse(BaseModel):
+    """Response model for re_embed endpoint."""
+
+    updated_files: list[str]
+    indexed_count: int
+    skipped_count: int
+    errors: list[str] | None = None
+
+
+class SearchMemoryRequest(BaseModel):
+    """Request model for search_memory endpoint."""
+
+    queries: list[str]
+    top_k: int = 5
+    types: list[str] | None = None  # Filter by memory types
+
+
+class MemoryResult(BaseModel):
+    """Single memory search result."""
+
+    id: str
+    description: str
+    score: float
+    excerpt: str  # Matching chunk or truncated content
+
+
+class SearchMemoryResponse(BaseModel):
+    """Response model for search_memory endpoint."""
+
+    results: list[MemoryResult]
+
+
+class TriggerMemoryRequest(BaseModel):
+    """Request model for trigger_memory endpoint."""
+
+    query: str
+    threshold: float = 0.7
+
+
+class TriggerMemoryResponse(BaseModel):
+    """Response model for trigger_memory endpoint."""
+
+    has_relevant: bool
+    hint: str | None = None  # Brief description if matched
+    score: float = 0.0
+
+
+class LoadMemoryRequest(BaseModel):
+    """Request model for load_memory endpoint."""
+
+    ids: list[str]
+
+
+class MemoryContent(BaseModel):
+    """Full memory content for load response."""
+
+    id: str
+    content: str
+    source: str
+    description: str | None = None
+
+
+class LoadMemoryResponse(BaseModel):
+    """Response model for load_memory endpoint."""
+
+    memories: list[MemoryContent]

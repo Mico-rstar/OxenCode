@@ -9,10 +9,11 @@ from contextlib import asynccontextmanager
 
 from memsvc import __version__
 from memsvc.api import router
-from memsvc.api.router import set_metadata_manager, set_file_watcher
+from memsvc.api.router import set_metadata_manager, set_file_watcher, set_memory_indexer
 from memsvc.config import settings
 from memsvc.core.metadata import MetadataManager
 from memsvc.core.watcher import FileWatcher
+from memsvc.core.indexer import MemoryIndexer
 
 # Configure logging
 logging.basicConfig(
@@ -24,12 +25,13 @@ logger = logging.getLogger(__name__)
 # Global instances
 metadata_manager: MetadataManager | None = None
 file_watcher: FileWatcher | None = None
+memory_indexer: MemoryIndexer | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global metadata_manager, file_watcher
+    global metadata_manager, file_watcher, memory_indexer
 
     # Startup
     logger.info("Starting memory service...")
@@ -47,6 +49,14 @@ async def lifespan(app: FastAPI):
     changes = await metadata_manager.scan_and_update()
     logger.info(f"Initial scan complete: {len(changes)} changes detected")
 
+    # Initialize memory indexer
+    memory_indexer = MemoryIndexer(
+        metadata_manager=metadata_manager,
+    )
+    memory_indexer.initialize()
+    set_memory_indexer(memory_indexer)
+    logger.info("Memory indexer initialized")
+
     # Start file watcher if enabled
     if settings.watch_enabled:
         file_watcher = FileWatcher(metadata_manager)
@@ -62,6 +72,11 @@ async def lifespan(app: FastAPI):
         file_watcher.stop()
         logger.info("File watcher stopped")
 
+    if memory_indexer:
+        if memory_indexer.vector_store:
+            memory_indexer.vector_store.close()
+        logger.info("Memory indexer closed")
+
     if metadata_manager:
         await metadata_manager.close()
         logger.info("Metadata manager closed")
@@ -69,6 +84,7 @@ async def lifespan(app: FastAPI):
     # Clear global references
     set_metadata_manager(None)
     set_file_watcher(None)
+    set_memory_indexer(None)
 
 
 app = FastAPI(
