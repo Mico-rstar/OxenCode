@@ -107,8 +107,8 @@ func (e *ToolExecutor) truncateOutput(output, toolName string) string {
 // getToolOutputMaxLength 获取工具输出最大长度
 func (e *ToolExecutor) getToolOutputMaxLength() int {
 	// 从配置读取，默认 10KB
-	if e.config != nil && e.config.ToolOutputMaxLength > 0 {
-		return e.config.ToolOutputMaxLength
+	if e.config != nil && e.config.ReAct.ToolOutputMaxLength > 0 {
+		return e.config.ReAct.ToolOutputMaxLength
 	}
 	return 10000
 }

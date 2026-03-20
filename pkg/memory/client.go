@@ -7,44 +7,38 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/yourname/oxencode/pkg/config"
 	"github.com/yourname/oxencode/pkg/logger"
 )
 
-// Client 记忆服务HTTP客户端
+// Client 记忆服务 HTTP 客户端
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	logger     logger.Logger
 }
 
-// ClientConfig 客户端配置
-type ClientConfig struct {
-	BaseURL        string
-	Timeout        time.Duration
-	MaxRetries     int
-	RetryInterval  time.Duration
-}
-
-// DefaultClientConfig 默认配置
-func DefaultClientConfig(baseURL string) *ClientConfig {
-	return &ClientConfig{
-		BaseURL:       baseURL,
-		Timeout:       30 * time.Second,
-		MaxRetries:    3,
-		RetryInterval: 1 * time.Second,
-	}
-}
-
 // NewClient 创建新的记忆服务客户端
-func NewClient(cfg *ClientConfig) *Client {
+func NewClient(cfg *config.MemoryClientConfig) *Client {
 	if cfg == nil {
-		cfg = DefaultClientConfig("http://127.0.0.1:8765")
+		cfg = config.DefaultMemoryClientConfig()
 	}
+
+	// 确保 baseURL 以 /api/v1 结尾
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	log := logger.New("memory-client")
+	log.Debug("NewClient called", "cfg.BaseURL", cfg.BaseURL, "trimmed", baseURL)
+	if len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+		panic("invalid memory server url")
+	}
+	baseURL += "/api/v1"
+	log.Debug("baseURL after appending /api/v1", "baseURL", baseURL)
 
 	return &Client{
-		baseURL: cfg.BaseURL,
+		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
@@ -52,7 +46,7 @@ func NewClient(cfg *ClientConfig) *Client {
 	}
 }
 
-// doRequest 执行HTTP请求，带重试
+// doRequest 执行 HTTP 请求，带重试
 func (c *Client) doRequest(ctx context.Context, method, path string, reqBody, respBody any) error {
 	var body io.Reader
 	if reqBody != nil {
@@ -118,10 +112,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqBody, re
 }
 
 // TriggerMemory 快速判断是否有相关记忆
-func (c *Client) TriggerMemory(ctx context.Context, query string) (*TriggerMemoryResponse, error) {
+func (c *Client) TriggerMemory(ctx context.Context, query string, threshold float64) (*TriggerMemoryResponse, error) {
 	req := &TriggerMemoryRequest{
 		Query:     query,
-		Threshold: 0.7,
+		Threshold: threshold,
 	}
 	resp := &TriggerMemoryResponse{}
 	if err := c.doRequest(ctx, http.MethodPost, "/trigger_memory", req, resp); err != nil {
@@ -131,7 +125,7 @@ func (c *Client) TriggerMemory(ctx context.Context, query string) (*TriggerMemor
 	return resp, nil
 }
 
-// SearchMemory RAG检索记忆
+// SearchMemory RAG 检索记忆
 func (c *Client) SearchMemory(ctx context.Context, queries []string, topK int) (*SearchMemoryResponse, error) {
 	req := &SearchMemoryRequest{
 		Queries: queries,
@@ -158,7 +152,7 @@ func (c *Client) LoadMemory(ctx context.Context, ids []string) (*LoadMemoryRespo
 	return resp, nil
 }
 
-// CommitSession 提交session进行异步处理
+// CommitSession 提交 session 进行异步处理
 func (c *Client) CommitSession(ctx context.Context, sessionID string, messages []MessageSchema) (*CommitSessionResponse, error) {
 	req := &CommitSessionRequest{
 		SessionID: sessionID,
@@ -183,7 +177,7 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (*TaskStatusR
 	return resp, nil
 }
 
-// RetrySession 重试失败的session处理
+// RetrySession 重试失败的 session 处理
 func (c *Client) RetrySession(ctx context.Context, sessionID string) (*CommitSessionResponse, error) {
 	req := &RetrySessionRequest{
 		SessionID: sessionID,

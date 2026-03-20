@@ -145,7 +145,7 @@ func NewModel() Model {
 		cancelFunc:    cancel,
 		statusTime:    time.Now().Format("15:04:05"),
 		statusConn:    StatusOnline,
-		statusModel:   cfg.Model,
+		statusModel:   cfg.LLM.Model,
 		viewport:      viewport.New(0, 0),
 		atBottom:      true, // 初始时在底部
 	}

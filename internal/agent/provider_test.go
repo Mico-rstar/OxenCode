@@ -11,10 +11,12 @@ import (
 func TestQwenProvider(t *testing.T) {
 	apiKey := "sk-test-key"
 	cfg := &config.Config{
-		Provider:    config.ProviderQwen,
-		Model:       "qwen-max",
-		MaxTokens:   4096,
-		Temperature: 0.7,
+		LLM: config.LLMConfig{
+			Provider:    config.ProviderQwen,
+			Model:       "qwen-max",
+			MaxTokens:   4096,
+			Temperature: 0.7,
+		},
 	}
 
 	provider, err := createProvider(cfg, apiKey)
@@ -27,7 +29,7 @@ func TestQwenProvider(t *testing.T) {
 	}
 
 	// 测试获取 language model
-	model, err := provider.LanguageModel(context.Background(), cfg.Model)
+	model, err := provider.LanguageModel(context.Background(), cfg.LLM.Model)
 	if err != nil {
 		t.Fatalf("provider.LanguageModel() error = %v", err)
 	}
@@ -43,10 +45,12 @@ func TestQwenProvider(t *testing.T) {
 func TestOpenAIProvider(t *testing.T) {
 	apiKey := "sk-test-key"
 	cfg := &config.Config{
-		Provider:    config.ProviderOpenAI,
-		Model:       "gpt-4",
-		MaxTokens:   4096,
-		Temperature: 0.7,
+		LLM: config.LLMConfig{
+			Provider:    config.ProviderOpenAI,
+			Model:       "gpt-4",
+			MaxTokens:   4096,
+			Temperature: 0.7,
+		},
 	}
 
 	provider, err := createProvider(cfg, apiKey)
@@ -59,7 +63,7 @@ func TestOpenAIProvider(t *testing.T) {
 	}
 
 	// 测试获取 language model
-	model, err := provider.LanguageModel(context.Background(), cfg.Model)
+	model, err := provider.LanguageModel(context.Background(), cfg.LLM.Model)
 	if err != nil {
 		t.Fatalf("provider.LanguageModel() error = %v", err)
 	}
@@ -75,10 +79,12 @@ func TestOpenAIProvider(t *testing.T) {
 func TestDeepSeekProvider(t *testing.T) {
 	apiKey := "sk-test-key"
 	cfg := &config.Config{
-		Provider:    config.ProviderDeepSeek,
-		Model:       "deepseek-chat",
-		MaxTokens:   4096,
-		Temperature: 0.7,
+		LLM: config.LLMConfig{
+			Provider:    config.ProviderDeepSeek,
+			Model:       "deepseek-chat",
+			MaxTokens:   4096,
+			Temperature: 0.7,
+		},
 	}
 
 	provider, err := createProvider(cfg, apiKey)
@@ -91,7 +97,7 @@ func TestDeepSeekProvider(t *testing.T) {
 	}
 
 	// 测试获取 language model
-	model, err := provider.LanguageModel(context.Background(), cfg.Model)
+	model, err := provider.LanguageModel(context.Background(), cfg.LLM.Model)
 	if err != nil {
 		t.Fatalf("provider.LanguageModel() error = %v", err)
 	}

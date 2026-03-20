@@ -32,7 +32,7 @@ type LLMCompressor struct {
 func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, strategy *CompressionStrategy, cfg *config.Config, lg logger.Logger, prt *prompt.Prompt) (*LLMCompressor, error) {
 
 	// 从全局配置读取模型配置
-	model := cfg.CompressorModel
+	model := cfg.Compressor.Model
 	if model == "" {
 		panic("CompressorModel is needed in config")
 	}
@@ -42,12 +42,12 @@ func NewLLMCompressor(ctx context.Context, provider fantasy.Provider, strategy *
 		return nil, fmt.Errorf("failed to create language model: %w", err)
 	}
 
-	maxTokens := cfg.CompressorMaxTokens
+	maxTokens := cfg.Compressor.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 4096
 	}
 
-	temperature := cfg.CompressorTemperature
+	temperature := cfg.Compressor.Temperature
 	if temperature == 0 {
 		temperature = 0.3
 	}

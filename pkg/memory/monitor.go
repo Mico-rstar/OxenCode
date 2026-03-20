@@ -22,9 +22,9 @@ type TaskMonitor struct {
 func NewTaskMonitor(client *Client, cfg *config.Config) *TaskMonitor {
 	return &TaskMonitor{
 		client:       client,
-		pollInterval: time.Duration(cfg.MemoryMonitorPollInterval) * time.Second,
-		maxRetries:   cfg.MemoryMonitorMaxRetries,
-		timeout:      time.Duration(cfg.MemoryMonitorTimeout) * time.Second,
+		pollInterval: time.Duration(cfg.Memory.MonitorPollInterval) * time.Second,
+		maxRetries:   cfg.Memory.MonitorMaxRetries,
+		timeout:      time.Duration(cfg.Memory.MonitorTimeout) * time.Second,
 		logger:       logger.New("memory-monitor"),
 	}
 }

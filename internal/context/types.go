@@ -46,12 +46,12 @@ func NewThresholds(cfg *config.Config) Thresholds {
 	softMaxL2Ratio := 0.7
 
 	if cfg != nil {
-		maxContext = cfg.MaxContextTokens
-		hardMaxL0Percent = cfg.HardMaxL0Percent
-		hardMaxL1Percent = cfg.HardMaxL1Percent
-		softMaxL1Ratio = cfg.SoftMaxL1Ratio
-		hardMaxL2Percent = cfg.HardMaxL2Percent
-		softMaxL2Ratio = cfg.SoftMaxL2Ratio
+		maxContext = cfg.Context.MaxContextTokens
+		hardMaxL0Percent = cfg.Context.HardMaxL0Percent
+		hardMaxL1Percent = cfg.Context.HardMaxL1Percent
+		softMaxL1Ratio = cfg.Context.SoftMaxL1Ratio
+		hardMaxL2Percent = cfg.Context.HardMaxL2Percent
+		softMaxL2Ratio = cfg.Context.SoftMaxL2Ratio
 	}
 
 	hardMaxL0 := int(float64(maxContext) * hardMaxL0Percent)
@@ -90,8 +90,8 @@ func NewCompressionStrategy(pageType PageType, cfg *config.Config) *CompressionS
 	case PageTypeL1:
 		return &CompressionStrategy{
 			Timeout:             30 * time.Second,
-			MaxToolOutputLength: cfg.L1MaxToolOutputLength,
-			MaxAssistantLength:  cfg.L1MaxAssistantLength,
+			MaxToolOutputLength: cfg.Context.L1MaxToolOutput,
+			MaxAssistantLength:  cfg.Context.L1MaxAssistant,
 		}
 	case PageTypeL0:
 		return &CompressionStrategy{

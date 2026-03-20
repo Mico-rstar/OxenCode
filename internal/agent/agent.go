@@ -60,7 +60,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	// 获取 API Key
 	apiKey := cfg.GetAPIKeyFromEnv()
 	if apiKey == "" {
-		return nil, fmt.Errorf("API key not found for provider %s: please set the appropriate environment variable", cfg.Provider)
+		return nil, fmt.Errorf("API key not found for provider %s: please set the appropriate environment variable", cfg.LLM.Provider)
 	}
 
 	// 创建 provider
@@ -70,7 +70,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	}
 
 	// 获取 language model
-	model, err := provider.LanguageModel(context.Background(), cfg.Model)
+	model, err := provider.LanguageModel(context.Background(), cfg.LLM.Model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get language model: %w", err)
 	}
@@ -104,7 +104,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	registry.Register(readTool)
 
 	// 注册 P1 工具（使用配置的超时时间）
-	toolTimeout := time.Duration(cfg.ToolTimeout) * time.Second
+	toolTimeout := time.Duration(cfg.Tool.Timeout) * time.Second
 	bashTool := tools.NewBashToolWithTimeout(env, log, toolTimeout)
 	writeTool := tools.NewWriteTool(env, log)
 	editTool := tools.NewEditTool(env, log)
@@ -121,9 +121,9 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	// 创建记忆服务客户端（如果启用）
 	var memoryClient *memory.Client
 	var taskMonitor *memory.TaskMonitor
-	if cfg.MemoryEnabled {
-		memoryClient = memory.NewClient(memory.DefaultClientConfig(cfg.MemoryServiceURL))
-		log.Info("Memory service client created", "url", cfg.MemoryServiceURL)
+	if cfg.Memory.Enabled {
+		memoryClient = memory.NewClient(cfg.Memory.ToClientConfig())
+		log.Info("Memory service client created", "url", cfg.Memory.BaseURL)
 
 		// 检查记忆服务健康状态
 		if err := memoryClient.HealthCheck(context.Background()); err != nil {
@@ -197,10 +197,10 @@ func loadSystemPrompt(cfg *config.Config, log logger.Logger) string {
 	vars := make(map[string]string)
 
 	// 加载inner内容（如果记忆服务启用）
-	if cfg.MemoryEnabled && cfg.MemoryDir != "" {
-		vars = loadInnerVars(cfg.MemoryDir, log)
+	if cfg.Memory.Enabled && cfg.Memory.Dir != "" {
+		vars = loadInnerVars(cfg.Memory.Dir, log)
 		if len(vars) > 0 {
-			log.Info("Inner content loaded", "memory_dir", cfg.MemoryDir)
+			log.Info("Inner content loaded", "memory_dir", cfg.Memory.Dir)
 		}
 	}
 
@@ -239,7 +239,7 @@ func loadInnerVars(memoryDir string, log logger.Logger) map[string]string {
 
 // createProvider 根据 provider 类型创建对应的 provider
 func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error) {
-	switch cfg.Provider {
+	switch cfg.LLM.Provider {
 	case config.ProviderAnthropic:
 		return anthropic.New(
 			anthropic.WithAPIKey(apiKey),
@@ -252,9 +252,9 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 
 	case config.ProviderAzure:
 		return azure.New(
-			azure.WithBaseURL(cfg.AzureEndpoint),
+			azure.WithBaseURL(cfg.LLM.Azure.Endpoint),
 			azure.WithAPIKey(apiKey),
-			azure.WithAPIVersion(cfg.AzureAPIVersion),
+			azure.WithAPIVersion(cfg.LLM.Azure.APIVersion),
 		)
 
 	case config.ProviderBedrock:
@@ -263,9 +263,10 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 		)
 
 	case config.ProviderGoogle:
-		if cfg.GoogleLocation != "" {
+		googleConfig := cfg.LLM.Google
+		if googleConfig != nil && googleConfig.Location != "" {
 			return google.New(
-				google.WithVertex(cfg.GoogleProject, cfg.GoogleLocation),
+				google.WithVertex(googleConfig.Project, googleConfig.Location),
 			)
 		}
 		return google.New(
@@ -274,9 +275,10 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 
 	case config.ProviderOpenAICompat:
 		// 支持自定义 base_url
-		if cfg.BaseURL != "" {
+		baseURL := cfg.LLM.GetBaseURL()
+		if baseURL != "" {
 			return openaicompat.New(
-				openaicompat.WithBaseURL(cfg.BaseURL),
+				openaicompat.WithBaseURL(baseURL),
 				openaicompat.WithAPIKey(apiKey),
 			)
 		}
@@ -286,7 +288,7 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 
 	case config.ProviderQwen:
 		// Qwen (通义千问) 使用 DashScope API
-		baseURL := cfg.BaseURL
+		baseURL := cfg.LLM.GetBaseURL()
 		if baseURL == "" {
 			baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 		}
@@ -306,7 +308,7 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 
 	case config.ProviderDeepSeek:
 		// DeepSeek API
-		baseURL := cfg.BaseURL
+		baseURL := cfg.LLM.GetBaseURL()
 		if baseURL == "" {
 			baseURL = "https://api.deepseek.com"
 		}
@@ -317,7 +319,7 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 
 	case config.ProviderGLM:
 		// GLM (智谱清言) API
-		baseURL := cfg.BaseURL
+		baseURL := cfg.LLM.GetBaseURL()
 		if baseURL == "" {
 			baseURL = "https://open.bigmodel.cn/api/paas/v4"
 		}
@@ -337,14 +339,14 @@ func createProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error)
 		)
 
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", cfg.Provider)
+		return nil, fmt.Errorf("unsupported provider: %s", cfg.LLM.Provider)
 	}
 }
 
 // createCompressorProvider 创建用于压缩器的 provider
 // 注意：不设置 stream_options 等流式专用配置，因为压缩器使用非流式调用（Generate）
 func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provider, error) {
-	switch cfg.Provider {
+	switch cfg.LLM.Provider {
 	case config.ProviderAnthropic:
 		return anthropic.New(
 			anthropic.WithAPIKey(apiKey),
@@ -357,9 +359,9 @@ func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provid
 
 	case config.ProviderAzure:
 		return azure.New(
-			azure.WithBaseURL(cfg.AzureEndpoint),
+			azure.WithBaseURL(cfg.LLM.Azure.Endpoint),
 			azure.WithAPIKey(apiKey),
-			azure.WithAPIVersion(cfg.AzureAPIVersion),
+			azure.WithAPIVersion(cfg.LLM.Azure.APIVersion),
 		)
 
 	case config.ProviderBedrock:
@@ -371,9 +373,9 @@ func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provid
 		)
 
 	case config.ProviderOpenAICompat:
-		if cfg.BaseURL != "" {
+		if cfg.LLM.BaseURL != "" {
 			return openaicompat.New(
-				openaicompat.WithBaseURL(cfg.BaseURL),
+				openaicompat.WithBaseURL(cfg.LLM.BaseURL),
 				openaicompat.WithAPIKey(apiKey),
 			)
 		}
@@ -384,7 +386,7 @@ func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provid
 	case config.ProviderQwen:
 		// Qwen (通义千问) 使用 DashScope API
 		// 注意：不设置 stream_options，因为压缩器使用非流式调用
-		baseURL := cfg.BaseURL
+		baseURL := cfg.LLM.BaseURL
 		if baseURL == "" {
 			baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 		}
@@ -394,7 +396,7 @@ func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provid
 		)
 
 	case config.ProviderDeepSeek:
-		baseURL := cfg.BaseURL
+		baseURL := cfg.LLM.BaseURL
 		if baseURL == "" {
 			baseURL = "https://api.deepseek.com"
 		}
@@ -404,7 +406,7 @@ func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provid
 		)
 
 	case config.ProviderGLM:
-		baseURL := cfg.BaseURL
+		baseURL := cfg.LLM.BaseURL
 		if baseURL == "" {
 			baseURL = "https://open.bigmodel.cn/api/paas/v4"
 		}
@@ -424,7 +426,7 @@ func createCompressorProvider(cfg *config.Config, apiKey string) (fantasy.Provid
 		)
 
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", cfg.Provider)
+		return nil, fmt.Errorf("unsupported provider: %s", cfg.LLM.Provider)
 	}
 }
 
@@ -541,7 +543,7 @@ func (a *Agent) SearchArchive(query string, limit int) ([]ctxarchive.ArchiveEntr
 // CommitSessionToMemory 将当前会话提交到记忆服务
 // 返回task_id用于追踪异步处理状态
 func (a *Agent) CommitSessionToMemory(ctx context.Context) (string, error) {
-	if !a.config.MemoryEnabled {
+	if !a.config.Memory.Enabled {
 		return "", fmt.Errorf("memory service not enabled")
 	}
 
@@ -593,5 +595,5 @@ func (a *Agent) CommitSessionToMemory(ctx context.Context) (string, error) {
 
 // IsMemoryEnabled 检查记忆服务是否启用
 func (a *Agent) IsMemoryEnabled() bool {
-	return a.config.MemoryEnabled && a.memoryClient != nil
+	return a.config.Memory.Enabled && a.memoryClient != nil
 }

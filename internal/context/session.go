@@ -77,7 +77,7 @@ func NewSession(systemPrompt string, cfg *config.Config, compressor Compressor) 
 		l0Strategy = NewCompressionStrategy(PageTypeL0, cfg)
 		l1Strategy = NewCompressionStrategy(PageTypeL1, cfg)
 		l2Strategy = NewCompressionStrategy(PageTypeL2, cfg)
-		maxContextTokens = cfg.MaxContextTokens
+		maxContextTokens = cfg.Context.MaxContextTokens
 	} else {
 		l0Strategy, l1Strategy, l2Strategy = DefaultCompressionStrategies()
 		maxContextTokens = 200000 // 默认值
@@ -208,7 +208,7 @@ func (s *Session) isInCompressingLocked() bool {
 
 // waitForCompressComplete 等待压缩完成
 func (s *Session) waitForCompressComplete() {
-	timeout := time.Duration(s.cfg.CompressTimeout) * time.Second
+	timeout := time.Duration(s.cfg.Context.CompressTimeout) * time.Second
 	select {
 	case <-s.compressDone:
 	case <-time.After(timeout):

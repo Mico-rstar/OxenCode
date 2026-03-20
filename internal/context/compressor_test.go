@@ -41,9 +41,11 @@ func TestL0CompressWithRealLLM(t *testing.T) {
 
 	// 创建配置
 	cfg := &config.Config{
-		CompressorModel:       "qwen-plus",
-		CompressorMaxTokens:   4096,
-		CompressorTemperature: 0.3,
+		Compressor: config.CompressorConfig{
+			Model:       "qwen-plus",
+			MaxTokens:   4096,
+			Temperature: 0.3,
+		},
 	}
 
 	// 创建压缩器
@@ -97,10 +99,14 @@ func TestL0CompressWithSession(t *testing.T) {
 
 	// 创建配置
 	cfg := &config.Config{
-		CompressorModel:       "qwen-plus",
-		CompressorMaxTokens:   4096,
-		CompressorTemperature: 0.3,
-		MaxPageTokens:         2000,
+		Compressor: config.CompressorConfig{
+			Model:       "qwen-plus",
+			MaxTokens:   4096,
+			Temperature: 0.3,
+		},
+		Context: config.ContextConfig{
+			MaxPageTokens: 2000,
+		},
 	}
 
 	// 创建L0压缩策略

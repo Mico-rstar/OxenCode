@@ -129,8 +129,9 @@ type StreamEvent struct {
 func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[StreamEvent] {
 	return func(yield func(StreamEvent) bool) {
 		// 1. 调用trigger_memory快速判断是否有相关记忆
-		if r.memoryClient != nil && r.cfg.MemoryEnabled {
-			triggerResp, err := r.memoryClient.TriggerMemory(ctx, userMessage)
+		if r.memoryClient != nil && r.cfg.Memory.Enabled {
+			threshold := r.cfg.Memory.TriggerThreshold
+			triggerResp, err := r.memoryClient.TriggerMemory(ctx, userMessage, threshold)
 			if err != nil {
 				r.logger.Warn("TriggerMemory failed", "error", err)
 			} else if triggerResp.HasRelevant {
@@ -193,8 +194,8 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 			// 流式调用 LLM
 			stream, err := r.model.Stream(ctx, fantasy.Call{
 				Prompt:          messages,
-				MaxOutputTokens: ptr(int64(r.cfg.MaxTokens)),
-				Temperature:     ptr(r.cfg.Temperature),
+				MaxOutputTokens: ptr(int64(r.cfg.LLM.MaxTokens)),
+				Temperature:     ptr(r.cfg.LLM.Temperature),
 				Tools:           r.buildToolDefinitions(),
 			})
 			if err != nil {
@@ -332,8 +333,8 @@ func (r *ReActLoop) Stream(ctx context.Context, userMessage string) iter.Seq[Str
 func (r *ReActLoop) callLLM(ctx context.Context, messages []fantasy.Message) (*fantasy.Response, error) {
 	return r.model.Generate(ctx, fantasy.Call{
 		Prompt:          messages,
-		MaxOutputTokens: ptr(int64(r.cfg.MaxTokens)),
-		Temperature:     ptr(r.cfg.Temperature),
+		MaxOutputTokens: ptr(int64(r.cfg.LLM.MaxTokens)),
+		Temperature:     ptr(r.cfg.LLM.Temperature),
 		Tools:           r.buildToolDefinitions(),
 	})
 }
