@@ -208,4 +208,67 @@ def create_memory_tools(
 
         return "exists" if full_path.exists() else "not_found"
 
-    return [read_file, write_file, edit_file, list_files, grep_files, file_exists]
+    @tool
+    def head_file(path: str, lines: int = 20) -> str:
+        """Read the first N lines of a file.
+
+        Use this to quickly preview the beginning of a file without reading the entire content.
+
+        Args:
+            path: Relative path from memory directory (e.g., 'notes/session_id.md')
+            lines: Number of lines to read from the beginning (default: 20)
+
+        Returns:
+            File content (first N lines with line numbers) or error message.
+        """
+        full_path, error = validate_read_path(path)
+        if error:
+            return error
+        if not full_path.exists():
+            return f"Error: File not found: {path}"
+        try:
+            content = full_path.read_text(encoding="utf-8")
+            file_lines = content.split("\n")
+            head_lines = file_lines[:lines]
+            result = []
+            for i, line in enumerate(head_lines, 1):
+                result.append(f"{i:5d}→{line}")
+            if len(file_lines) > lines:
+                result.append(f"... ({len(file_lines) - lines} more lines)")
+            return "\n".join(result)
+        except Exception as e:
+            return f"Error reading file: {e}"
+
+    @tool
+    def tail_file(path: str, lines: int = 20) -> str:
+        """Read the last N lines of a file.
+
+        Use this to quickly preview the end of a file without reading the entire content.
+
+        Args:
+            path: Relative path from memory directory (e.g., 'notes/session_id.md')
+            lines: Number of lines to read from the end (default: 20)
+
+        Returns:
+            File content (last N lines with line numbers) or error message.
+        """
+        full_path, error = validate_read_path(path)
+        if error:
+            return error
+        if not full_path.exists():
+            return f"Error: File not found: {path}"
+        try:
+            content = full_path.read_text(encoding="utf-8")
+            file_lines = content.split("\n")
+            tail_lines = file_lines[-lines:] if len(file_lines) > lines else file_lines
+            start_line = max(1, len(file_lines) - lines + 1)
+            result = []
+            for i, line in enumerate(tail_lines, start_line):
+                result.append(f"{i:5d}→{line}")
+            if len(file_lines) > lines:
+                result.insert(0, f"... ({len(file_lines) - lines} lines omitted)")
+            return "\n".join(result)
+        except Exception as e:
+            return f"Error reading file: {e}"
+
+    return [read_file, write_file, edit_file, list_files, grep_files, file_exists, head_file, tail_file]

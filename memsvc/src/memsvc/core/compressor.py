@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from memsvc.config import settings
-from memsvc.core.llm import LLMProvider
+from memsvc.core.llm import QwenLLM, MockLLM
 from memsvc.models.session import SessionTask, SessionData, Message
 from memsvc.utils.prompt_loader import PromptLoader
 
@@ -23,7 +23,7 @@ class SessionCompressor:
 
     def __init__(
         self,
-        llm: LLMProvider,
+        llm: QwenLLM | MockLLM,
         memory_dir: Path | None = None,
         prompt_loader: PromptLoader | None = None,
     ):

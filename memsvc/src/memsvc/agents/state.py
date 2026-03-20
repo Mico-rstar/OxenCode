@@ -53,8 +53,6 @@ class SessionWorkflowState(TypedDict):
     notes_content: str
 
     # Step 3: Agent context (loaded before parallel execution)
-    existing_experiences: str
-    existing_knowledge: str
     current_self: str
     current_user: str
 

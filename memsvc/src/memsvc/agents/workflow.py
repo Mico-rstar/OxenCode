@@ -6,15 +6,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 
 from memsvc.agents.state import SessionWorkflowState, AgentResult
 from memsvc.agents.tools import create_memory_tools
 from memsvc.config import settings
-from memsvc.core.llm import LLMProvider
+from memsvc.core.llm import QwenLLM, MockLLM
 from memsvc.core.indexer import MemoryIndexer
 from memsvc.core.metadata import MetadataManager
 from memsvc.utils.prompt_loader import PromptLoader
@@ -44,7 +44,7 @@ class SessionWorkflow:
 
     def __init__(
         self,
-        llm: LLMProvider,
+        llm: QwenLLM | MockLLM,
         memory_dir: Path | None = None,
         metadata_manager: MetadataManager | None = None,
         indexer: MemoryIndexer | None = None,
@@ -179,8 +179,6 @@ created_at: {created_at}
     async def load_agent_context_node(self, state: SessionWorkflowState) -> dict:
         """Load existing memories for agent context."""
         return {
-            "existing_experiences": self._read_directory_summary("experience"),
-            "existing_knowledge": self._read_directory_summary("knowledge"),
             "current_self": self._read_file("inner/self.md"),
             "current_user": self._read_file("inner/user.md"),
         }
@@ -289,43 +287,51 @@ created_at: {created_at}
         prompt_template: str,
         state: SessionWorkflowState,
     ) -> dict:
-        """Run a single memory agent.
+        """Run a memory agent using LangChain's create_agent.
 
-        This method creates a simple agent using LangChain's LLM with tools.
-        For more advanced agent behavior, consider using create_agent from
-        langchain.agents.
+        The agent has access to file tools (read, write, edit, list, grep)
+        and will use them to analyze notes and update memory files.
         """
         try:
-            tools = create_memory_tools(write_dir, self.memory_dir)
-
-            # Load the prompt template
+            # Load the system prompt template
             prompt = self.prompt_loader.load(
                 prompt_template,
                 notes_content=state["notes_content"],
-                existing_experiences=state.get("existing_experiences", ""),
-                existing_knowledge=state.get("existing_knowledge", ""),
                 current_self=state.get("current_self", ""),
                 current_user=state.get("current_user", ""),
             )
 
-            # For now, use a simple LLM call with the prompt
-            # The agent should use tools to interact with files
-            # This is a simplified implementation - full agent would use
-            # langchain.agents.create_agent with tool binding
+            # Create tools for this agent (sandboxed to write_dir)
+            tools = create_memory_tools(write_dir, self.memory_dir)
 
-            # Build messages for LLM
-            user_message = (
-                f"Analyze the session notes and update {write_dir} memories as needed.\n\n"
-                f"Available tools: {[t.name for t in tools]}\n\n"
-                "Use the tools to read files and write/edit memories."
+            # Skip agent execution if using mock LLM (no tool calling support)
+            if isinstance(self.llm, MockLLM):
+                logger.info(f"{agent_name} agent: mock LLM, simulating execution")
+                return {
+                    "agent_results": [{
+                        "agent_name": agent_name,
+                        "success": True,
+                        "files_written": [],
+                        "files_edited": [],
+                        "error": None,
+                    }]
+                }
+
+            # Create agent with tools using LangChain's create_agent
+            agent = create_agent(
+                model=self.llm.chat_model,
+                tools=tools,
+                system_prompt=prompt,
+                name=agent_name,
             )
 
-            # Call LLM with the full prompt
+            # Execute agent
             logger.info(f"Running {agent_name} agent for {state['session_id']}")
-            response = await self.llm.complete(
-                prompt=user_message,
-                system=prompt,
-            )
+            result = await agent.ainvoke({
+                "messages": [
+                    HumanMessage(content="Analyze the session notes and update memories as needed.")
+                ]
+            })
 
             logger.info(f"{agent_name} agent completed for {state['session_id']}")
 
@@ -410,8 +416,6 @@ created_at: {created_at}
             "notes_written": False,
             "notes_path": None,
             "notes_content": "",
-            "existing_experiences": "",
-            "existing_knowledge": "",
             "current_self": "",
             "current_user": "",
             "agent_results": [],

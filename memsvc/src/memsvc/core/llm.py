@@ -1,51 +1,24 @@
-"""LLM providers for session compression."""
+"""LLM providers for session compression and agents."""
 
 import asyncio
 import logging
-from abc import ABC, abstractmethod
-from http import HTTPStatus
 
-import dashscope
-from dashscope import Generation
+from langchain_community.chat_models.tongyi import ChatTongyi
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from memsvc.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class LLMProvider(ABC):
-    """Abstract base class for LLM providers."""
+class QwenLLM:
+    """Qwen ChatModel via LangChain ChatTongyi.
 
-    @abstractmethod
-    async def complete(
-        self,
-        prompt: str,
-        system: str | None = None,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-    ) -> str:
-        """Generate completion for a prompt.
-
-        Args:
-            prompt: The user prompt.
-            system: Optional system prompt.
-            max_tokens: Maximum tokens to generate.
-            temperature: Sampling temperature.
-
-        Returns:
-            Generated text.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def model(self) -> str:
-        """Return model name."""
-        pass
-
-
-class QwenLLM(LLMProvider):
-    """Qwen LLM via DashScope SDK."""
+    Provides both:
+    - chat_model: LangChain ChatModel for agents with tool calling
+    - complete(): Backward-compatible method for session compression
+    """
 
     def __init__(
         self,
@@ -54,7 +27,7 @@ class QwenLLM(LLMProvider):
         max_tokens: int | None = None,
         temperature: float | None = None,
     ):
-        """Initialize Qwen LLM provider.
+        """Initialize Qwen LLM provider via LangChain.
 
         Args:
             api_key: DashScope API key. Defaults to settings.effective_llm_api_key.
@@ -70,8 +43,15 @@ class QwenLLM(LLMProvider):
         if not self._api_key:
             raise ValueError("Qwen LLM requires an API key. Set MEMSVC_LLM_API_KEY or MEMSVC_EMBEDDING_API_KEY.")
 
-        # Configure dashscope with API key
-        dashscope.api_key = self._api_key
+        # Create LangChain ChatModel with tool calling support via ChatTongyi
+        self.chat_model: BaseChatModel = ChatTongyi(
+            model=self._model,
+            api_key=self._api_key,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+        )
+
+        logger.info(f"Initialized Qwen ChatTongyi: {self._model}")
 
     @property
     def model(self) -> str:
@@ -84,7 +64,9 @@ class QwenLLM(LLMProvider):
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> str:
-        """Generate completion using DashScope SDK.
+        """Generate completion using LangChain ChatTongyi.
+
+        Backward-compatible method for session compression.
 
         Args:
             prompt: The user prompt.
@@ -100,50 +82,31 @@ class QwenLLM(LLMProvider):
         """
         messages = []
         if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+            messages.append(SystemMessage(content=system))
+        messages.append(HumanMessage(content=prompt))
 
-        def _call_generation():
-            response = Generation.call(
-                model=self._model,
-                messages=messages,
-                max_tokens=max_tokens or self._max_tokens,
-                temperature=temperature if temperature is not None else self._temperature,
-            )
-            return response
+        config = {}
+        if max_tokens:
+            config["max_tokens"] = max_tokens
+        if temperature is not None:
+            config["temperature"] = temperature
 
-        response = await asyncio.to_thread(_call_generation)
-
-        # Log full response for debugging
-        logger.debug(f"DashScope response: status_code={response.status_code}, code={response.code}")
-
-        if response.status_code != HTTPStatus.OK:
-            error_msg = f"DashScope API error: {response.code} - {response.message}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-
-        # Check for valid output
-        if response.output is None:
-            error_msg = f"DashScope API returned no output: code={response.code}, message={response.message}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-
-        # Extract content from response
         try:
-            content = response.output["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as e:
-            error_msg = f"Unexpected DashScope response format: {response.output}, error: {e}"
+            response = await self.chat_model.ainvoke(messages, config=config)
+            content = response.content
+            logger.debug(f"LLM completion generated: {len(content)} chars")
+            return content
+        except Exception as e:
+            error_msg = f"LangChain ChatTongyi error: {e}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-        logger.debug(f"LLM completion generated: {len(content)} chars")
-        return content
 
-
-class MockLLM(LLMProvider):
+class MockLLM:
     """Mock LLM provider for testing without external dependencies.
 
     Returns a fixed response pattern useful for testing.
+    Provides a mock chat_model attribute for agent testing.
     """
 
     def __init__(self, model: str = "mock-llm"):
@@ -153,6 +116,7 @@ class MockLLM(LLMProvider):
             model: Model name for identification.
         """
         self._model = model
+        self.chat_model = None  # No chat model for mock
 
     @property
     def model(self) -> str:
@@ -203,14 +167,14 @@ This is a mock session summary for testing purposes.
         return mock_response
 
 
-def get_llm_provider(provider: str | None = None) -> LLMProvider:
+def get_llm_provider(provider: str | None = None) -> QwenLLM | MockLLM:
     """Factory function to create LLM provider.
 
     Args:
         provider: Provider name ("qwen" or "mock"). Defaults to settings.llm_provider.
 
     Returns:
-        LLMProvider instance.
+        LLM instance (QwenLLM or MockLLM).
 
     Raises:
         ValueError: If provider name is unknown.

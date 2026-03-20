@@ -20,7 +20,7 @@ from memsvc.config import settings
 from memsvc.core.metadata import MetadataManager
 from memsvc.core.watcher import FileWatcher
 from memsvc.core.indexer import MemoryIndexer
-from memsvc.core.llm import get_llm_provider, LLMProvider
+from memsvc.core.llm import get_llm_provider, QwenLLM, MockLLM
 from memsvc.core.task_manager import TaskManager
 from memsvc.core.compressor import SessionCompressor
 from memsvc.agents.workflow import SessionWorkflow
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 metadata_manager: MetadataManager | None = None
 file_watcher: FileWatcher | None = None
 memory_indexer: MemoryIndexer | None = None
-llm_provider: LLMProvider | None = None
+llm_provider: QwenLLM | MockLLM | None = None
 task_manager: TaskManager | None = None
 session_compressor: SessionCompressor | None = None
 session_workflow: SessionWorkflow | None = None
