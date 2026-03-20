@@ -23,6 +23,7 @@ from memsvc.core.indexer import MemoryIndexer
 from memsvc.core.llm import get_llm_provider, LLMProvider
 from memsvc.core.task_manager import TaskManager
 from memsvc.core.compressor import SessionCompressor
+from memsvc.agents.workflow import SessionWorkflow
 
 # Configure logging
 logging.basicConfig(
@@ -38,12 +39,13 @@ memory_indexer: MemoryIndexer | None = None
 llm_provider: LLMProvider | None = None
 task_manager: TaskManager | None = None
 session_compressor: SessionCompressor | None = None
+session_workflow: SessionWorkflow | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global metadata_manager, file_watcher, memory_indexer, llm_provider, task_manager, session_compressor
+    global metadata_manager, file_watcher, memory_indexer, llm_provider, task_manager, session_compressor, session_workflow
 
     # Startup
     logger.info("Starting memory service...")
@@ -73,7 +75,7 @@ async def lifespan(app: FastAPI):
     llm_provider = get_llm_provider()
     logger.info(f"LLM provider initialized: {llm_provider.model}")
 
-    # Initialize session compressor
+    # Initialize session compressor (kept for backward compatibility)
     session_compressor = SessionCompressor(llm=llm_provider)
     set_session_compressor(session_compressor)
     logger.info("Session compressor initialized")
@@ -82,15 +84,15 @@ async def lifespan(app: FastAPI):
     task_manager = TaskManager(metadata_manager=metadata_manager)
     await task_manager.initialize()
 
-    # Set the processor for task manager
-    async def process_session_task(task, messages):
-        await session_compressor.process_session(
-            task,
-            messages,
-            skip_histories=task.histories_written,
-        )
+    # Initialize LangGraph workflow
+    session_workflow = SessionWorkflow(
+        llm=llm_provider,
+        metadata_manager=metadata_manager,
+        indexer=memory_indexer,
+    )
+    task_manager.set_workflow(session_workflow)
+    logger.info("Session workflow initialized")
 
-    task_manager.set_processor(process_session_task)
     set_task_manager(task_manager)
     logger.info("Task manager initialized")
 

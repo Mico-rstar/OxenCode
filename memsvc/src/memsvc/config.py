@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # Session compression configuration
     max_messages_for_compression: int = 100
 
+    # Memory agent configuration
+    agent_enabled: bool = True
+    agent_timeout_seconds: int = 300
+
     @property
     def db_path(self) -> Path:
         """Path to metadata database."""

@@ -4,13 +4,16 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
-from typing import Callable, Awaitable, AsyncIterator
+from typing import Callable, Awaitable, AsyncIterator, TYPE_CHECKING
 
 import aiosqlite
 
 from memsvc.config import settings
 from memsvc.core.metadata import MetadataManager
 from memsvc.models.session import SessionTask, TaskStatus
+
+if TYPE_CHECKING:
+    from memsvc.agents.workflow import SessionWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,7 @@ class TaskManager:
         self._worker_task: asyncio.Task | None = None
         self._tasks: dict[str, SessionTask] = {}  # task_id -> SessionTask
         self._processor: Callable[[SessionTask, list], Awaitable[None]] | None = None
+        self._workflow: "SessionWorkflow | None" = None
         self._pending_messages: dict[str, list] = {}  # session_id -> messages
         self._db: aiosqlite.Connection | None = None
 
@@ -98,6 +102,17 @@ class TaskManager:
         """
         self._processor = processor
         logger.debug("Task processor set")
+
+    def set_workflow(self, workflow: "SessionWorkflow") -> None:
+        """Set the LangGraph workflow for processing.
+
+        When a workflow is set, it takes precedence over the processor callback.
+
+        Args:
+            workflow: SessionWorkflow instance for LangGraph-based processing.
+        """
+        self._workflow = workflow
+        logger.debug("SessionWorkflow set")
 
     async def create_task(
         self,
@@ -249,16 +264,6 @@ class TaskManager:
                 task = await self._queue.get()
                 logger.info(f"Processing task {task.task_id}")
 
-                # Get processor
-                if not self._processor:
-                    logger.error("No processor set for task manager")
-                    await self.update_task_status(
-                        task.task_id,
-                        TaskStatus.FAILED,
-                        error="No processor configured"
-                    )
-                    continue
-
                 # Get messages
                 messages = self._pending_messages.pop(task.session_id, None)
                 if messages is None:
@@ -277,11 +282,30 @@ class TaskManager:
                 # Update status to running
                 await self.update_task_status(task.task_id, TaskStatus.RUNNING)
 
-                # Process
+                # Process using workflow if available, otherwise use processor
                 try:
-                    await self._processor(task, messages)
-                    await self.update_task_status(task.task_id, TaskStatus.COMPLETED)
-                    logger.info(f"Task {task.task_id} completed")
+                    if self._workflow:
+                        result = await self._workflow.run(task.session_id, messages)
+                        if result.get("error"):
+                            await self.update_task_status(
+                                task.task_id,
+                                TaskStatus.FAILED,
+                                error=result["error"]
+                            )
+                        else:
+                            await self.update_task_status(task.task_id, TaskStatus.COMPLETED)
+                            logger.info(f"Task {task.task_id} completed via workflow")
+                    elif self._processor:
+                        await self._processor(task, messages)
+                        await self.update_task_status(task.task_id, TaskStatus.COMPLETED)
+                        logger.info(f"Task {task.task_id} completed")
+                    else:
+                        logger.error("No workflow or processor set for task manager")
+                        await self.update_task_status(
+                            task.task_id,
+                            TaskStatus.FAILED,
+                            error="No workflow or processor configured"
+                        )
                 except Exception as e:
                     logger.exception(f"Task {task.task_id} failed: {e}")
                     await self.update_task_status(
