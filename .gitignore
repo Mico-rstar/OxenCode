@@ -60,5 +60,6 @@ snapshot/
 # python
 __pycache__/
 .venv/
+*.lock
 
-archive/
+archives/
