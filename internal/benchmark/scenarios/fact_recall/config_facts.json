@@ -1,0 +1,71 @@
+{
+  "id": "config_facts_001",
+  "name": "配置事实召回",
+  "description": "测试 agent 对配置项的准确召回",
+  "dimension": "fact_recall",
+  "tags": ["config", "accuracy"],
+  "version": "1.0",
+
+  "config": {
+    "max_iterations": 5,
+    "timeout_seconds": 60,
+    "temperature": 0.2,
+    "memory_enabled": true
+  },
+
+  "memory_precondition": {
+    "knowledge": [
+      {
+        "id": "memory_config",
+        "description": "记忆服务配置项",
+        "content": "# 记忆服务配置\n\n## 配置文件: ~/.oxencode/config.toml\n\n```toml\n[memory]\nenabled = true\ndir = \"~/.oxencode/memory\"\nbase_url = \"http://127.0.0.1:8765\"\ntrigger_threshold = 0.7\n```\n\n## 配置项说明\n\n### enabled\n- 类型: boolean\n- 默认值: false\n- 说明: 是否启用记忆服务\n\n### dir\n- 类型: string\n- 默认值: ~/.oxencode/memory\n- 说明: 记忆数据存储目录\n\n### base_url\n- 类型: string\n- 默认值: http://127.0.0.1:8765\n- 说明: 记忆服务地址\n\n### trigger_threshold\n- 类型: float\n- 默认值: 0.7\n- 说明: trigger_memory 的相关性阈值"
+      },
+      {
+        "id": "llm_config",
+        "description": "LLM 配置项",
+        "content": "# LLM 配置\n\n## 配置示例\n\n```toml\n[llm]\nprovider = \"qwen\"\nmodel = \"qwen-plus\"\ntemperature = 0.7\nmax_tokens = 4096\n```\n\n## 支持的 Provider\n\n| Provider | 说明 | 环境变量 |\n|----------|------|----------|\n| anthropic | Claude | ANTHROPIC_API_KEY |\n| openai | GPT | OPENAI_API_KEY |\n| qwen | 通义千问 | DASHSCOPE_API_KEY |\n| deepseek | DeepSeek | DEEPSEEK_API_KEY |\n| glm | 智谱 | GLM_API_KEY |\n\n## Temperature 说明\n- 0.0: 确定性输出\n- 0.7: 平衡创造性和一致性（默认）\n- 1.0: 更有创造性"
+      }
+    ]
+  },
+
+  "sessions": [
+    {
+      "id": "query_memory_dir",
+      "description": "查询记忆目录",
+      "messages": [
+        {
+          "role": "user",
+          "content": "记忆数据默认存储在哪个目录？"
+        }
+      ],
+      "expected": {
+        "response_contains": [".oxencode/memory", "~/.oxencode/memory"],
+        "should_use_memory": true
+      },
+      "wait_after_seconds": 0
+    },
+    {
+      "id": "query_provider",
+      "description": "查询支持的 provider",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Qwen provider 需要设置哪个环境变量？"
+        }
+      ],
+      "expected": {
+        "response_contains": ["DASHSCOPE_API_KEY"],
+        "should_use_memory": true
+      },
+      "wait_after_seconds": 0
+    }
+  ],
+
+  "evaluation": {
+    "weights": {
+      "correctness": 0.7,
+      "efficiency": 0.1,
+      "memory_usage": 0.2
+    }
+  }
+}

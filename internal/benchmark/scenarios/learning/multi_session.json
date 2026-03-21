@@ -1,0 +1,81 @@
+{
+  "id": "multi_session_001",
+  "name": "多会话知识保持",
+  "description": "测试 agent 在多会话场景下的知识保持能力",
+  "dimension": "learning",
+  "tags": ["retention", "multi-session", "knowledge"],
+  "version": "1.0",
+
+  "config": {
+    "max_iterations": 10,
+    "timeout_seconds": 180,
+    "temperature": 0.3,
+    "memory_enabled": true
+  },
+
+  "memory_precondition": {
+    "knowledge": [
+      {
+        "id": "oxencode_structure",
+        "description": "OxenCode 项目结构和约定",
+        "content": "# OxenCode 项目结构\n\n## 核心目录\n- `cmd/oxencode/` - 程序入口点\n- `internal/` - 内部实现（不对外暴露）\n  - `agent/` - ReAct 循环实现\n  - `tools/` - 工具系统\n  - `ui/` - TUI 界面\n  - `context/` - 上下文管理\n  - `benchmark/` - 基准测试系统\n- `pkg/` - 可复用的公共包\n  - `config/` - 配置管理\n  - `memory/` - 记忆服务客户端\n  - `prompt/` - 提示词系统\n- `memsvc/` - Python 记忆服务\n\n## 命名约定\n- Go 文件使用 snake_case: `react_loop.go`\n- 测试文件后缀: `*_test.go`\n- 接口名使用动词或名词: `Evaluator`, `Reader`\n\n## 添加新模块的步骤\n1. 在 internal/ 下创建目录\n2. 实现核心逻辑\n3. 编写测试\n4. 更新文档"
+      }
+    ]
+  },
+
+  "sessions": [
+    {
+      "id": "session_learn",
+      "description": "第一会话：学习项目结构",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我想添加一个新的 benchmark 模块，应该放在哪个目录下？需要遵循什么命名约定？"
+        }
+      ],
+      "expected": {
+        "response_contains": ["internal/", "snake_case", "benchmark"],
+        "should_use_memory": true
+      },
+      "wait_after_seconds": 5
+    },
+    {
+      "id": "session_recall",
+      "description": "第二会话：测试知识保持",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我想添加测试文件，文件命名应该遵循什么约定？"
+        }
+      ],
+      "expected": {
+        "response_contains": ["_test.go"],
+        "should_use_memory": true
+      },
+      "wait_after_seconds": 5
+    },
+    {
+      "id": "session_transfer",
+      "description": "第三会话：测试知识迁移",
+      "messages": [
+        {
+          "role": "user",
+          "content": "我想创建一个新的工具模块，放在哪里？"
+        }
+      ],
+      "expected": {
+        "response_contains": ["internal/tools/"],
+        "should_use_memory": true
+      },
+      "wait_after_seconds": 0
+    }
+  ],
+
+  "evaluation": {
+    "weights": {
+      "correctness": 0.4,
+      "efficiency": 0.2,
+      "memory_usage": 0.4
+    }
+  }
+}

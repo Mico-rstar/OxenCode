@@ -1,0 +1,57 @@
+{
+  "id": "bash_error_001",
+  "name": "Bash 命令错误恢复",
+  "description": "测试 agent 能否从 bash 命令错误中学习",
+  "dimension": "tool_skill",
+  "tags": ["bash", "error-recovery", "paths"],
+  "version": "1.0",
+
+  "config": {
+    "max_iterations": 10,
+    "timeout_seconds": 120,
+    "temperature": 0.3,
+    "memory_enabled": true
+  },
+
+  "memory_precondition": {
+    "experience": [
+      {
+        "id": "bash_path_spaces",
+        "description": "Bash 命令中包含空格的路径需要引号",
+        "content": "# Bash 工具：路径中的空格处理\n\n## 问题\n当文件或目录路径包含空格时，直接使用会导致命令解析错误。\n\n## 错误示例\n```\ncd /path/to/my folder  // 错误：会被解析为两个参数\n```\n\n## 正确做法\n```\ncd \"/path/to/my folder\"  // 正确：使用引号包裹\n```\n\n## 最佳实践\n- 始终用双引号包裹可能包含空格的路径\n- 或使用转义符: `/path/to/my\\ folder`\n\n## 识别标志\n如果 bash 返回 'no such file or directory' 但文件确实存在，检查路径是否包含空格。"
+      }
+    ]
+  },
+
+  "sessions": [
+    {
+      "id": "test_path_spaces",
+      "description": "测试包含空格的路径处理",
+      "messages": [
+        {
+          "role": "user",
+          "content": "列出 My Projects 目录下的文件"
+        }
+      ],
+      "expected": {
+        "tool_calls": [
+          {
+            "name": "Bash",
+            "input_contains": {"command": "ls"},
+            "input_not_contain": {"args": "My Projects"}
+          }
+        ],
+        "should_avoid_mistake": true
+      },
+      "wait_after_seconds": 0
+    }
+  ],
+
+  "evaluation": {
+    "weights": {
+      "correctness": 0.6,
+      "efficiency": 0.2,
+      "memory_usage": 0.2
+    }
+  }
+}

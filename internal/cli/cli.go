@@ -54,6 +54,7 @@ func (c *CLI) registerCommands() {
 	c.registry.Register(commands.NewNewCommand())
 	c.registry.Register(commands.NewHelpCommand(c.registry))
 	c.registry.Register(commands.NewCommitMemoryCommand())
+	c.registry.Register(commands.NewBenchmarkCommand())
 }
 
 // Run 启动 REPL 循环

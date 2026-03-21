@@ -153,3 +153,27 @@ memory_service_url = "http://127.0.0.1:8765"
 # 触发记忆检索的相似度阈值
 # 默认值：0.5
 # memory_trigger_threshold = 0.5
+
+# ====== 记忆服务详细配置 ======
+# 以下配置用于 memsvc Python 服务
+# embedding 配置
+memory_embedding_provider = "qwen"  # 可选: qwen, mock
+memory_embedding_model = "text-embedding-v3"
+memory_embedding_dimension = 1024
+
+# LLM 配置 (用于会话压缩和记忆整理)
+memory_llm_provider = "qwen"  # 可选: qwen, mock
+memory_llm_model = "qwen3-max"
+memory_llm_max_tokens = 2000
+memory_llm_temperature = 0.7
+
+# Chunking 配置
+memory_chunk_size = 500
+memory_chunk_overlap = 50
+
+# Agent 配置
+memory_agent_enabled = true
+memory_agent_timeout_seconds = 300
+
+# Watch 配置
+memory_watch_enabled = true

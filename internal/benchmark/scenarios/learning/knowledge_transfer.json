@@ -1,0 +1,51 @@
+{
+  "id": "knowledge_transfer_001",
+  "name": "知识迁移能力",
+  "description": "测试 agent 能否将学到的知识迁移到类似场景",
+  "dimension": "learning",
+  "tags": ["transfer", "pattern-recognition"],
+  "version": "1.0",
+
+  "config": {
+    "max_iterations": 10,
+    "timeout_seconds": 120,
+    "temperature": 0.3,
+    "memory_enabled": true
+  },
+
+  "memory_precondition": {
+    "experience": [
+      {
+        "id": "error_handling_pattern",
+        "description": "错误处理模式：检查错误后采取行动",
+        "content": "# 错误处理模式\n\n## 模式\n当工具调用失败时，应该：\n1. 分析错误原因\n2. 调整策略\n3. 重试或使用替代方案\n\n## 示例\n如果 Read 工具报告文件不存在：\n- 首先使用 Glob 确认文件路径\n- 检查是否拼写错误\n- 如果路径正确但文件不存在，说明文件确实不存在\n\n## 原则\n- 不要重复相同的失败操作\n- 每次尝试都应该基于之前的反馈调整\n- 考虑使用其他工具验证假设"
+      }
+    ]
+  },
+
+  "sessions": [
+    {
+      "id": "test_transfer",
+      "description": "测试错误处理模式的迁移",
+      "messages": [
+        {
+          "role": "user",
+          "content": "读取 /home/user/projects/main.go 文件"
+        }
+      ],
+      "expected": {
+        "response_contains": ["文件不存在", "找不到", "Glob"],
+        "should_use_memory": true
+      },
+      "wait_after_seconds": 0
+    }
+  ],
+
+  "evaluation": {
+    "weights": {
+      "correctness": 0.5,
+      "efficiency": 0.3,
+      "memory_usage": 0.2
+    }
+  }
+}
