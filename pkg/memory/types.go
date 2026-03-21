@@ -1,6 +1,46 @@
 package memory
 
-import "time"
+import (
+	"strings"
+	"time"
+)
+
+// FlexibleTime 支持多种时间格式的反序列化
+type FlexibleTime struct {
+	time.Time
+}
+
+// UnmarshalJSON 实现 json.Unmarshaler 接口，支持多种时间格式
+func (ft *FlexibleTime) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), "\"")
+	if s == "" {
+		return nil
+	}
+
+	// 尝试多种时间格式
+	formats := []string{
+		time.RFC3339,                    // 2006-01-02T15:04:05Z07:00
+		time.RFC3339Nano,                // 2006-01-02T15:04:05.999999999Z07:00
+		"2006-01-02T15:04:05.999999",   // Python isoformat() 无时区
+		"2006-01-02T15:04:05",          // 无时区无微秒
+		"2006-01-02 15:04:05",          // 空格分隔
+		"2006-01-02",                   // 仅日期
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, s); err == nil {
+			// 如果原始格式没有时区信息，假设为 UTC
+			if t.Location().String() == "" {
+				ft.Time = t.UTC()
+			} else {
+				ft.Time = t
+			}
+			return nil
+		}
+	}
+
+	return nil
+}
 
 // TriggerMemoryRequest 快速判断是否有相关记忆
 type TriggerMemoryRequest struct {
@@ -73,13 +113,13 @@ type CommitSessionResponse struct {
 
 // TaskStatusResponse 任务状态响应
 type TaskStatusResponse struct {
-	TaskID           string     `json:"task_id"`
-	SessionID        string     `json:"session_id"`
-	Status           string     `json:"status"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	ErrorMessage     *string    `json:"error_message,omitempty"`
-	HistoriesWritten bool       `json:"histories_written"`
+	TaskID           string      `json:"task_id"`
+	SessionID        string      `json:"session_id"`
+	Status           string      `json:"status"`
+	CreatedAt        FlexibleTime `json:"created_at"`
+	UpdatedAt        FlexibleTime `json:"updated_at"`
+	ErrorMessage     *string     `json:"error_message,omitempty"`
+	HistoriesWritten bool        `json:"histories_written"`
 }
 
 // RetrySessionRequest retry_session请求

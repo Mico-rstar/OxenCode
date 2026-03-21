@@ -148,3 +148,8 @@ memory_service_url = "http://127.0.0.1:8765"
 # 单任务监控超时（秒）
 # 默认值: 600 (10分钟)
 # memory_monitor_timeout = 600
+
+# ====== 记忆触发阈值配置 ======
+# 触发记忆检索的相似度阈值
+# 默认值：0.5
+# memory_trigger_threshold = 0.5

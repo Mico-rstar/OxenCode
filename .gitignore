@@ -60,3 +60,5 @@ snapshot/
 # python
 __pycache__/
 .venv/
+
+archive/

@@ -26,8 +26,12 @@ memory
 
 
 ### 记忆管理系统后台任务
-1. session处理队列: 将commit_session 摘要为notes -> 启动experience_agent, knowledge_agent, inner_agent，注入各自的system_prompt和notes为上下文，进行记忆整理 -> 等待所有代理运行成功 -> 触发 re_embed -> 更新状态 -> 启动experience_agent, knowledge_agent, inner_agent，注入各自的system_prompt和notes为上下文，进行记忆整理 -> 等待所有代理运行成功 -> 触发 re_embed -> 更新状态
-2. 
+1. write_histories
+2. 压缩notes
+3. 并行启动 experience_agent, knowledge_agent, inner_agent
+4. re_embed
+
+
 ## Design
 ### 技术栈
 
@@ -367,11 +371,12 @@ description: 描述文档的主要内容/调用条件
 
 #### Phase 6: 多Agent记忆整理 (Python)
 1. 设计experience_agent、knowledge_agent、inner_agent系统提示
-2. 实现Agent基类与LLM调用封装
-3. 集成到异步任务流程：notes压缩完成后启动多Agent
-4. 并发执行多Agent，收集整理结果
-5. 汇总写入experience/knowledge/inner目录
-6. 自动触发re_embed
+2. 复用langchain的agent抽象实现任务agent
+3. 复用langgraph抽象集成到异步任务流程：
+   1. 写入histories
+   2. notes压缩
+   3. 构造上下文（system_prompt+notes），并行执行多Agent，更新experience/knowledge/inner目录
+   4. 触发re_embed重建索引
 
 **验收标准：**
 - [ ] experience_agent能从notes提取经验规则（"遇到X情况，应该Y"）
@@ -382,6 +387,9 @@ description: 描述文档的主要内容/调用条件
 - [ ] 整理完成后自动触发re_embed更新索引
 - [ ] Agent执行失败不影响notes压缩结果
 - [ ] 完整的日志记录和错误处理
+
+**补充上下文：**
+[session-process-workflow](./session-process-workflow.md)
 
 #### Phase 7: 优化与测试
 1. Rerank集成

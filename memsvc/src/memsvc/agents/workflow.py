@@ -158,11 +158,13 @@ class SessionWorkflow:
         if not description:
             description = f"Session {session_id} summary"
 
-        # Create frontmatter
+        # Create frontmatter with source_history reference
         created_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        histories_filename = f"{session_id}.json"
         frontmatter = f"""---
 description: {description}
 created_at: {created_at}
+source_history: histories/{histories_filename}
 ---
 
 """

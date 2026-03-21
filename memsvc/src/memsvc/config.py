@@ -98,7 +98,7 @@ class Settings(BaseSettings):
         return self.llm_api_key or self.embedding_api_key
 
     def ensure_directories(self) -> None:
-        """Create necessary directories."""
+        """Create necessary directories with placeholder files."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -108,6 +108,42 @@ class Settings(BaseSettings):
 
         # Create chromadb directory
         self.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create placeholder files to establish structure
+        self._ensure_placeholder_files()
+
+    def _ensure_placeholder_files(self) -> None:
+        """Create placeholder files to guide agents on directory structure."""
+        # inner/ - self.md and user.md placeholders
+        inner_dir = self.memory_dir / "inner"
+        self._create_placeholder(inner_dir / "self.md", """---
+description: Agent's self-awareness and identity
+---
+
+## Identity
+[Who you are]
+
+## Goals
+[What you're trying to achieve]
+""")
+
+        self._create_placeholder(inner_dir / "user.md", """---
+description: Understanding of the user
+---
+
+## Preferences
+[User preferences]
+""")
+
+        # experience/, knowledge/ - .gitkeep to mark directory purpose
+        for subdir in ["experience", "knowledge", "notes", "histories"]:
+            gitkeep = self.memory_dir / subdir / ".gitkeep"
+            gitkeep.touch(exist_ok=True)
+
+    def _create_placeholder(self, path: Path, content: str) -> None:
+        """Create a placeholder file if it doesn't exist."""
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
 
 
 # Global settings instance

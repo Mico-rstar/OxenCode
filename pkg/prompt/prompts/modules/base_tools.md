@@ -1,5 +1,3 @@
-**Available Tools:**
-
 **Glob** - Find files by pattern
 - Use when: Need to discover files matching a pattern (*.go, **/*.md, etc.)
 - Example: `glob("**/*.go")` to find all Go files
