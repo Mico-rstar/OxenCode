@@ -272,11 +272,17 @@ func (c *CLI) processMessage(ctx context.Context, input string) {
 
 // printAction 打印工具调用
 func (c *CLI) printAction(toolName, content string) {
-	fmt.Fprintf(c.writer, "\n[工具] %s", toolName)
-	if content != "" && len(content) < 100 {
-		fmt.Fprintf(c.writer, "(%s)", content)
+	// content 格式是 "ToolName(args)"，需要提取参数部分
+	var args string
+	if content != "" {
+		// content 格式: "ToolName(args)" 或 "ToolName()"
+		if idx := strings.Index(content, "("); idx != -1 {
+			// 提取括号内的内容（包含括号）
+			args = content[idx:]
+		}
 	}
-	fmt.Fprintln(c.writer)
+
+	fmt.Fprintf(c.writer, "\n[工具] %s%s\n", toolName, args)
 }
 
 // printObservation 打印工具结果
