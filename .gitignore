@@ -63,3 +63,6 @@ __pycache__/
 *.lock
 
 archives/
+
+# benchmark results
+memsvc/benchmark_results/

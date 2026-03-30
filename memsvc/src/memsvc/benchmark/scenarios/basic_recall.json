@@ -1,0 +1,72 @@
+{
+  "id": "basic_recall",
+  "name": "Basic Recall Test",
+  "description": "测试基础的语义召回能力，包括精确匹配、近义词改写和长尾查询",
+  "difficulty": "easy",
+  "tags": ["basic", "semantic", "recall"],
+  "noise_memories": 5,
+  "memories": [
+    {
+      "id": "git_basics",
+      "description": "Git 版本控制基础操作指南",
+      "content": "Git 是一个分布式版本控制系统。常用命令包括：git init 初始化仓库，git clone 克隆远程仓库，git add 添加文件到暂存区，git commit 提交更改，git push 推送到远程，git pull 拉取更新。分支操作：git branch 创建分支，git checkout 切换分支，git merge 合并分支。",
+      "category": "knowledge"
+    },
+    {
+      "id": "python_venv",
+      "description": "Python 虚拟环境配置方法",
+      "content": "Python 虚拟环境可以隔离项目依赖。创建虚拟环境：python -m venv myenv。激活虚拟环境：Windows 上使用 myenv\\Scripts\\activate，Linux/Mac 上使用 source myenv/bin/activate。退出虚拟环境：deactivate。安装依赖：pip install -r requirements.txt。",
+      "category": "knowledge"
+    },
+    {
+      "id": "api_error_handling",
+      "description": "遇到 API 错误时应该检查网络连接和重试",
+      "content": "当遇到 API 调用错误时，首先检查网络连接是否正常。如果是超时错误，可以增加超时时间或实现重试机制。对于 4xx 错误，检查请求参数是否正确。对于 5xx 错误，可以等待后重试。建议实现指数退避重试策略。",
+      "category": "experience"
+    },
+    {
+      "id": "debug_slow_query",
+      "description": "数据库慢查询调试步骤",
+      "content": "调试慢查询的步骤：1. 使用 EXPLAIN ANALYZE 查看执行计划。2. 检查是否缺少索引。3. 查看是否有全表扫描。4. 分析 JOIN 操作是否合理。5. 考虑数据量是否过大需要分表。6. 检查是否有 N+1 查询问题。",
+      "category": "experience"
+    },
+    {
+      "id": "user_pref_editor",
+      "description": "用户偏好使用 VSCode 作为主要编辑器",
+      "content": "用户喜欢使用 VSCode 进行开发，安装了 Python、Go、GitLens 等插件。偏好使用深色主题，字体大小 14。",
+      "category": "notes"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q_exact_git",
+      "text": "Git 版本控制怎么用？",
+      "expected_ids": ["git_basics"],
+      "query_type": "exact"
+    },
+    {
+      "id": "q_paraphrase_venv",
+      "text": "Python 项目怎么隔离依赖？",
+      "expected_ids": ["python_venv"],
+      "query_type": "paraphrase"
+    },
+    {
+      "id": "q_paraphrase_api",
+      "text": "API 调用失败怎么办？",
+      "expected_ids": ["api_error_handling"],
+      "query_type": "paraphrase"
+    },
+    {
+      "id": "q_semantic_db",
+      "text": "数据库查询很慢怎么排查？",
+      "expected_ids": ["debug_slow_query"],
+      "query_type": "semantic"
+    },
+    {
+      "id": "q_long_tail",
+      "text": "我想了解一下 Git 分支操作的相关命令",
+      "expected_ids": ["git_basics"],
+      "query_type": "long_tail"
+    }
+  ]
+}

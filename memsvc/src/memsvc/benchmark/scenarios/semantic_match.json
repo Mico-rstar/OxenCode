@@ -1,0 +1,84 @@
+{
+  "id": "semantic_match",
+  "name": "Semantic Match Test",
+  "description": "测试语义匹配能力，包含改写查询和语义相似但不相关的内容",
+  "difficulty": "medium",
+  "tags": ["semantic", "paraphrase", "disambiguation"],
+  "noise_memories": 10,
+  "memories": [
+    {
+      "id": "react_component_state",
+      "description": "React 组件状态管理最佳实践",
+      "content": "React 组件状态管理建议：1. 将状态尽量下放，只在需要的组件中维护。2. 对于复杂状态考虑使用 useReducer。3. 跨组件共享状态可使用 Context API 或状态管理库。4. 避免在渲染过程中直接修改状态。5. 使用 useEffect 处理副作用。",
+      "category": "knowledge"
+    },
+    {
+      "id": "react_hooks_rules",
+      "description": "React Hooks 使用规则",
+      "content": "React Hooks 使用规则：1. 只在函数组件顶层调用 Hooks。2. 只在 React 函数中调用 Hooks。3. useEffect 的依赖数组要完整。4. 使用 useCallback 和 useMemo 优化性能时要注意依赖项。5. 自定义 Hook 以 use 开头。",
+      "category": "knowledge"
+    },
+    {
+      "id": "memory_leak_debug",
+      "description": "内存泄漏调试经验",
+      "content": "内存泄漏调试步骤：1. 使用浏览器 DevTools 的 Memory 面板进行堆快照对比。2. 检查是否有未清理的定时器或事件监听器。3. 检查闭包是否持有大对象引用。4. 在 React 中检查 useEffect 是否正确清理订阅。5. 使用 Chrome 的 Performance Monitor 观察内存趋势。",
+      "category": "experience"
+    },
+    {
+      "id": "golang_error_wrap",
+      "description": "Go 语言错误处理最佳实践",
+      "content": "Go 错误处理建议：1. 使用 fmt.Errorf 包装错误添加上下文。2. 使用 errors.Is 和 errors.As 判断错误类型。3. 定义自定义错误类型实现 Error 接口。4. 在函数返回时尽早检查错误。5. 避免忽略错误，至少记录日志。",
+      "category": "knowledge"
+    },
+    {
+      "id": "test_coverage",
+      "description": "提高测试覆盖率的方法",
+      "content": "提高测试覆盖率：1. 使用 go test -cover 查看覆盖率。2. 关注核心业务逻辑的测试。3. 使用 table-driven 测试覆盖多种场景。4. 测试边界条件和错误情况。5. 使用 mocking 隔离外部依赖。6. 定期检查和补充测试用例。",
+      "category": "experience"
+    },
+    {
+      "id": "concurrent_bug",
+      "description": "并发 Bug 排查经验",
+      "content": "并发 Bug 排查：1. 使用 race detector (go run -race) 检测竞态条件。2. 检查是否有未同步的共享变量访问。3. 使用 sync.Mutex 或 channel 保护共享资源。4. 注意 goroutine 泄漏问题。5. 使用 context 控制 goroutine 生命周期。",
+      "category": "experience"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q_react_state",
+      "text": "前端 React 怎么管理组件的状态？",
+      "expected_ids": ["react_component_state"],
+      "query_type": "paraphrase"
+    },
+    {
+      "id": "q_hooks",
+      "text": "React 函数组件有什么使用规范？",
+      "expected_ids": ["react_hooks_rules"],
+      "query_type": "paraphrase"
+    },
+    {
+      "id": "q_memory",
+      "text": "网页内存占用一直增长怎么排查？",
+      "expected_ids": ["memory_leak_debug"],
+      "query_type": "semantic"
+    },
+    {
+      "id": "q_go_error",
+      "text": "Go 语言怎么处理和传递错误？",
+      "expected_ids": ["golang_error_wrap"],
+      "query_type": "paraphrase"
+    },
+    {
+      "id": "q_concurrent",
+      "text": "程序在多线程环境下有问题怎么调试？",
+      "expected_ids": ["concurrent_bug"],
+      "query_type": "semantic"
+    },
+    {
+      "id": "q_testing",
+      "text": "如何确保代码测试充分？",
+      "expected_ids": ["test_coverage"],
+      "query_type": "paraphrase"
+    }
+  ]
+}
